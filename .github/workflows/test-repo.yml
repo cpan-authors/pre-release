@@ -1,0 +1,640 @@
+name: Test CPAN Module from Repository
+run-name: Test ${{ inputs.repository }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: 'GitHub repository (owner/repo)'
+        type: string
+        required: true
+      include-distroprefs:
+        description: 'Use CPAN distribution preferences'
+        type: boolean
+        default: true
+      include-sysdeps:
+        description: 'Use cpan-sysdeps plugin for system dependencies'
+        type: boolean
+        default: true
+      enable-cpan-reporter:
+        description: 'Send test reports to CPAN Testers'
+        type: boolean
+        default: false
+      debug:
+        description: 'Enable debug output'
+        type: boolean
+        default: false
+
+jobs:
+  test-module:
+    name: on ${{ matrix.container || matrix.os }}
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: 'macos-14'
+            container: ~
+          - os: 'macos-15'
+            container: ~
+          - os: 'ubuntu-22.04'
+            container: ~
+          - os: 'ubuntu-24.04'
+            container: ~
+          - os: 'ubuntu-latest'
+            container: ubuntu:20.04
+          - os: 'ubuntu-latest'
+            container: ubuntu:24.04
+          - os: 'ubuntu-latest'
+            container: fedora:38
+          - os: 'ubuntu-latest'
+            container: fedora:43
+          - os: 'ubuntu-latest'
+            container: rockylinux:9
+          - os: 'ubuntu-latest'
+            container: debian:buster
+          - os: 'ubuntu-latest'
+            container: debian:bullseye
+          - os: 'ubuntu-latest'
+            container: debian:bookworm
+          - os: 'ubuntu-latest'
+            container: debian:trixie
+          - os: 'ubuntu-latest'
+            container: alpine:3.23
+
+    steps:
+    - name: Show inputs
+      run: echo "${{ toJSON(github.event.inputs) }}"
+
+    - name: "Fix sources.list for archived Debian releases"
+      run: |
+        codename="$(grep VERSION_CODENAME /etc/os-release 2>/dev/null | cut -d= -f2 || true)"
+        if [ "$codename" = "buster" ] || [ "$codename" = "stretch" ]; then
+          cat > /etc/apt/sources.list <<EOF
+        deb http://archive.debian.org/debian $codename main contrib non-free
+        deb http://archive.debian.org/debian-security $codename/updates main contrib non-free
+        EOF
+          rm -f /etc/apt/sources.list.d/*
+          echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until
+        fi
+
+    - uses: actions/checkout@v3
+      with:
+        repository: eserte/ci-helper-cpan-pm
+        path: ci-helper-cpan-pm
+      if: matrix.container == 'debian:buster'
+
+    - uses: actions/checkout@v6
+      with:
+        repository: eserte/ci-helper-cpan-pm
+        path: ci-helper-cpan-pm
+      if: matrix.container != 'debian:buster'
+
+    - name: "Rocky Linux: setup repositories"
+      run: |
+        dnf clean all
+        rm -rf /var/cache/yum
+        dnf update -y
+        dnf install -y dnf-plugins-core
+        dnf config-manager --set-enabled crb
+      if: "startsWith(matrix.container, 'rockylinux')"
+
+    - name: "rpm-based: install perl, git, build tools"
+      run: |
+        dnf -y install "perl(CPAN)" "perl(Test::More)" "perl(Parse::CPAN::Meta)" \
+          git make gcc patch glibc-devel
+      if: "startsWith(matrix.container, 'fedora') || startsWith(matrix.container, 'rockylinux')"
+
+    - name: "apt-based: install perl, git, build tools"
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudocmd=$( [ "$(id -u)" -ne 0 ] && echo "sudo" || echo "" )
+        $sudocmd apt-get update -yq && $sudocmd apt-get install -yqq perl git make gcc g++
+        echo "DEBIAN_FRONTEND=noninteractive" >> "$GITHUB_ENV"
+      if: "startsWith(matrix.container, 'debian') || startsWith(matrix.container || matrix.os, 'ubuntu')"
+
+    - name: "apk-based: install perl, git, build tools"
+      run: apk update -q && apk add -q perl perl-dev perl-utils git build-base wget patch
+      if: "startsWith(matrix.container, 'alpine')"
+
+    - name: "macOS: add Perl site bin to PATH"
+      run: echo "$(perl -MConfig -e 'print $Config{sitebin}')" >> $GITHUB_PATH
+      if: "startsWith(matrix.os, 'macos')"
+
+    - name: apt hacks
+      run: |
+        if [ -d /etc/apt/sources.list.d ]; then
+          sudocmd=$( [ "$(id -u)" -ne 0 ] && echo "sudo" || echo "" )
+          $sudocmd rm -f /etc/apt/sources.list.d/*.list
+          $sudocmd apt-get update -qq
+          $sudocmd apt-get remove -y libgd3 nginx 2>/dev/null || true
+        fi
+
+    - name: Setup CPAN with sysdeps
+      run: |
+        distroprefs_opts=
+        if [ "${{ inputs.include-distroprefs }}" = 'true' ]; then
+          distroprefs_opts='--distroprefs=https://github.com/eserte/srezic-cpan-distroprefs'
+        fi
+        sysdeps_opts=
+        if [ "${{ inputs.include-sysdeps }}" = 'true' ]; then
+          sysdeps_opts='--enable-sysdeps'
+        fi
+        cpan_reporter_opts=
+        if [ "${{ inputs.enable-cpan-reporter }}" = 'true' ]; then
+          cpan_reporter_opts='--enable-cpan-reporter --email-from=${{ github.actor }}@users.noreply.github.com'
+        fi
+        debug_opts=
+        if [ "${{ inputs.debug }}" = 'true' ]; then
+          debug_opts='--debug'
+        fi
+        set -ex
+        $GITHUB_WORKSPACE/ci-helper-cpan-pm/ci-helper-cpan-pm --no-test $distroprefs_opts $sysdeps_opts $cpan_reporter_opts $debug_opts
+
+    - name: Clone target repository
+      run: |
+        git clone --depth=1 https://github.com/${{ inputs.repository }}.git $GITHUB_WORKSPACE/target-module
+        cd $GITHUB_WORKSPACE/target-module
+        echo "Cloned ${{ inputs.repository }} at $(git rev-parse --short HEAD) on branch $(git branch --show-current || git rev-parse --abbrev-ref HEAD)"
+
+    - name: Detect module name
+      id: detect
+      run: |
+        cd $GITHUB_WORKSPACE/target-module
+        MODULE_NAME=""
+        if [ -f META.json ]; then
+          MODULE_NAME=$(perl -MJSON::PP -0777 -e '
+            open my $fh, "<", "META.json" or exit;
+            my $m = JSON::PP->new->decode(do { local $/; <$fh> });
+            (my $mod = $m->{name} // "") =~ s/-/::/g;
+            print $mod;
+          ' 2>/dev/null || true)
+        fi
+        if [ -z "$MODULE_NAME" ] && [ -f META.yml ]; then
+          MODULE_NAME=$(perl -ne 'if (/^name:\s*(\S+)/) { (my $m = $1) =~ s/-/::/g; print $m; exit }' META.yml 2>/dev/null || true)
+        fi
+        if [ -z "$MODULE_NAME" ] && [ -f Makefile.PL ]; then
+          MODULE_NAME=$(perl -ne "if (/NAME.*?=>.*?['\"]([^'\"]+)/) { print \$1; exit }" Makefile.PL 2>/dev/null || true)
+        fi
+        echo "module_name=$MODULE_NAME" >> "$GITHUB_OUTPUT"
+        echo "Detected module: ${MODULE_NAME:-unknown}"
+
+    - name: cpan-sysdeps check
+      if: inputs.include-sysdeps && steps.detect.outputs.module_name != ''
+      continue-on-error: true
+      run: cpan-sysdeps --cpanmod ${{ steps.detect.outputs.module_name }}
+
+    - name: cpan-sysdeps dry-run
+      if: inputs.include-sysdeps && steps.detect.outputs.module_name != ''
+      continue-on-error: true
+      run: cpan-sysdeps --cpanmod ${{ steps.detect.outputs.module_name }} --dry-run
+
+    - name: Install dependencies, build, and test
+      run: |
+        cd $GITHUB_WORKSPACE/target-module
+        set -ex
+
+        # Determine build system
+        if [ -f Makefile.PL ]; then
+          BUILD_SYSTEM=eumm
+        elif [ -f Build.PL ]; then
+          BUILD_SYSTEM=mb
+        else
+          echo "::error::No Makefile.PL or Build.PL found in ${{ inputs.repository }}"
+          exit 1
+        fi
+
+        # Install configure-time dependencies from META.json/META.yml
+        if [ -f META.json ]; then
+          CONFIGURE_DEPS=$(perl -MJSON::PP -0777 -e '
+            open my $fh, "<", "META.json" or exit;
+            my $m = JSON::PP->new->decode(do { local $/; <$fh> });
+            my %d;
+            for my $type (values %{$m->{prereqs}{configure} || {}}) {
+              $d{$_} = 1 for keys %$type;
+            }
+            delete $d{perl};
+            print join " ", sort keys %d if %d;
+          ' 2>/dev/null || true)
+          if [ -n "$CONFIGURE_DEPS" ]; then
+            echo "Installing configure dependencies: $CONFIGURE_DEPS"
+            cpan $CONFIGURE_DEPS
+          fi
+        fi
+
+        # Configure (generates MYMETA with accurate dependency info)
+        if [ "$BUILD_SYSTEM" = "eumm" ]; then
+          perl Makefile.PL
+        else
+          perl Build.PL
+        fi
+
+        # Install runtime, build, and test dependencies from MYMETA
+        DEPS=$(perl -MJSON::PP -0777 -e '
+          for my $f ("MYMETA.json", "META.json") {
+            next unless -f $f;
+            open my $fh, "<", $f or next;
+            my $m = JSON::PP->new->decode(do { local $/; <$fh> });
+            my %d;
+            for my $phase (qw(runtime build test)) {
+              for my $type (values %{$m->{prereqs}{$phase} || {}}) {
+                $d{$_} = 1 for keys %$type;
+              }
+            }
+            delete $d{perl};
+            print join " ", sort keys %d if %d;
+            exit;
+          }
+        ' 2>/dev/null || true)
+
+        if [ -n "$DEPS" ]; then
+          echo "Installing dependencies: $DEPS"
+          cpan $DEPS
+        fi
+
+        # Reconfigure and build with all dependencies available
+        if [ "$BUILD_SYSTEM" = "eumm" ]; then
+          perl Makefile.PL
+          make
+          make test
+        else
+          perl Build.PL
+          ./Build
+          ./Build test
+        fi
+
+    - name: Prepare artifact name
+      if: always() && inputs.enable-cpan-reporter == true
+      id: artifact-name
+      shell: sh
+      run: |
+        if [ -n "${{ matrix.container }}" ]; then
+          NAME="${{ matrix.container }}"
+        else
+          NAME="${{ matrix.os }}"
+        fi
+        NAME=$(echo "$NAME" | tr ':' '_')
+        echo "artifact_name=cpan-test-report-$NAME" >> $GITHUB_OUTPUT
+
+    - name: Upload CPAN test reports
+      if: always() && inputs.enable-cpan-reporter == true
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ steps.artifact-name.outputs.artifact_name }}
+        path: ~/var/cpantesters/new/*.rpt
+
+  test-module-windows:
+    name: on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: 'windows-2022'
+          - os: 'windows-2025'
+
+    steps:
+    - name: Show inputs
+      run: echo "${{ toJSON(github.event.inputs) }}"
+
+    - uses: actions/checkout@v6
+      with:
+        repository: eserte/ci-helper-cpan-pm
+        path: ci-helper-cpan-pm
+
+    - name: Setup CPAN with sysdeps
+      run: |
+        $distroprefs_opts = ""
+        if ("${{ inputs.include-distroprefs }}" -eq "true") {
+          $distroprefs_opts = "--distroprefs=https://github.com/eserte/srezic-cpan-distroprefs"
+        }
+        $sysdeps_opts = ""
+        if ("${{ inputs.include-sysdeps }}" -eq "true") {
+          $sysdeps_opts = "--enable-sysdeps"
+        }
+        $cpan_reporter_opts = ""
+        if ("${{ inputs.enable-cpan-reporter }}" -eq "true") {
+          $cpan_reporter_opts = "--enable-cpan-reporter --email-from=${{ github.actor }}@users.noreply.github.com"
+        }
+        $debug_opts = ""
+        if ("${{ inputs.debug }}" -eq "true") {
+          $debug_opts = "--debug"
+        }
+        $ci_helper_cmd = "perl $env:GITHUB_WORKSPACE\ci-helper-cpan-pm\ci-helper-cpan-pm --no-test $distroprefs_opts $sysdeps_opts $cpan_reporter_opts $debug_opts"
+        Write-Host $ci_helper_cmd
+        Invoke-Expression $ci_helper_cmd
+
+    - name: Prepend Strawberry Perl to PATH
+      run: |
+        echo "C:\Strawberry\c\bin;C:\Strawberry\perl\site\bin;C:\Strawberry\perl\bin;$env:PATH" > $env:GITHUB_PATH
+      shell: powershell
+
+    - name: Clone target repository
+      run: |
+        git clone --depth=1 https://github.com/${{ inputs.repository }}.git $env:GITHUB_WORKSPACE\target-module
+
+    - name: Detect module name
+      id: detect
+      shell: bash
+      run: |
+        cd "$GITHUB_WORKSPACE/target-module"
+        MODULE_NAME=""
+        if [ -f META.json ]; then
+          MODULE_NAME=$(perl -MJSON::PP -0777 -e '
+            open my $fh, "<", "META.json" or exit;
+            my $m = JSON::PP->new->decode(do { local $/; <$fh> });
+            (my $mod = $m->{name} // "") =~ s/-/::/g;
+            print $mod;
+          ' 2>/dev/null || true)
+        fi
+        if [ -z "$MODULE_NAME" ] && [ -f META.yml ]; then
+          MODULE_NAME=$(perl -ne 'if (/^name:\s*(\S+)/) { (my $m = $1) =~ s/-/::/g; print $m; exit }' META.yml 2>/dev/null || true)
+        fi
+        echo "module_name=$MODULE_NAME" >> "$GITHUB_OUTPUT"
+        echo "Detected module: ${MODULE_NAME:-unknown}"
+
+    - name: cpan-sysdeps check
+      if: inputs.include-sysdeps && steps.detect.outputs.module_name != ''
+      continue-on-error: true
+      run: cpan-sysdeps --cpanmod ${{ steps.detect.outputs.module_name }}
+
+    - name: Install dependencies, build, and test
+      shell: bash
+      run: |
+        cd "$GITHUB_WORKSPACE/target-module"
+        set -ex
+
+        MAKE_CMD=$(perl -MConfig -e 'print $Config{make}')
+
+        if [ -f Makefile.PL ]; then
+          BUILD_SYSTEM=eumm
+        elif [ -f Build.PL ]; then
+          BUILD_SYSTEM=mb
+        else
+          echo "::error::No Makefile.PL or Build.PL found in ${{ inputs.repository }}"
+          exit 1
+        fi
+
+        # Install configure-time dependencies
+        if [ -f META.json ]; then
+          CONFIGURE_DEPS=$(perl -MJSON::PP -0777 -e '
+            open my $fh, "<", "META.json" or exit;
+            my $m = JSON::PP->new->decode(do { local $/; <$fh> });
+            my %d;
+            for my $type (values %{$m->{prereqs}{configure} || {}}) {
+              $d{$_} = 1 for keys %$type;
+            }
+            delete $d{perl};
+            print join " ", sort keys %d if %d;
+          ' 2>/dev/null || true)
+          if [ -n "$CONFIGURE_DEPS" ]; then
+            cpan $CONFIGURE_DEPS
+          fi
+        fi
+
+        # Configure
+        if [ "$BUILD_SYSTEM" = "eumm" ]; then
+          perl Makefile.PL
+        else
+          perl Build.PL
+        fi
+
+        # Install runtime, build, and test dependencies
+        DEPS=$(perl -MJSON::PP -0777 -e '
+          for my $f ("MYMETA.json", "META.json") {
+            next unless -f $f;
+            open my $fh, "<", $f or next;
+            my $m = JSON::PP->new->decode(do { local $/; <$fh> });
+            my %d;
+            for my $phase (qw(runtime build test)) {
+              for my $type (values %{$m->{prereqs}{$phase} || {}}) {
+                $d{$_} = 1 for keys %$type;
+              }
+            }
+            delete $d{perl};
+            print join " ", sort keys %d if %d;
+            exit;
+          }
+        ' 2>/dev/null || true)
+
+        if [ -n "$DEPS" ]; then
+          cpan $DEPS
+        fi
+
+        # Build and test
+        if [ "$BUILD_SYSTEM" = "eumm" ]; then
+          perl Makefile.PL
+          $MAKE_CMD
+          $MAKE_CMD test
+        else
+          perl Build.PL
+          perl Build
+          perl Build test
+        fi
+
+    - name: Prepare artifact path
+      if: always() && inputs.enable-cpan-reporter == true
+      id: artifact-path
+      run: echo "userprofile=$env:USERPROFILE" >> $env:GITHUB_OUTPUT
+
+    - name: Upload CPAN test reports
+      if: always() && inputs.enable-cpan-reporter == true
+      uses: actions/upload-artifact@v7
+      with:
+        name: cpan-test-report-${{ matrix.os }}
+        path: ${{ steps.artifact-path.outputs.userprofile }}\\var\\cpantesters\\new\\*.rpt
+
+  test-module-bsd:
+    name: on ${{ matrix.operating_system }} ${{ matrix.osvers }} ${{ matrix.architecture }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - operating_system: freebsd
+            osvers: '15.0'
+            architecture: 'x86-64'
+          - operating_system: freebsd
+            osvers: '14.3'
+            architecture: 'x86-64'
+          - operating_system: freebsd
+            osvers: '13.5'
+            architecture: 'x86-64'
+          - operating_system: openbsd
+            osvers: '7.8'
+            architecture: 'x86-64'
+          - operating_system: netbsd
+            osvers: '10.1'
+            architecture: 'x86-64'
+
+    steps:
+    - name: Show inputs
+      run: echo "${{ toJSON(github.event.inputs) }}"
+
+    - uses: actions/checkout@v6
+      with:
+        repository: eserte/ci-helper-cpan-pm
+        path: ci-helper-cpan-pm
+
+    - uses: cross-platform-actions/action@v0.32.0
+      with:
+        operating_system: '${{ matrix.operating_system }}'
+        version: '${{ matrix.osvers }}'
+        architecture: '${{ matrix.architecture }}'
+        shell: bash
+        run: |
+          echo "::group::Install system prerequisites"
+          has_sysdeps_support=no
+          case "${{ matrix.operating_system }}" in
+            freebsd)
+              sudo pkg update
+              sudo pkg install -y perl5 git
+              has_sysdeps_support=yes
+              ;;
+            openbsd)
+              sudo pkg_add -u
+              sudo pkg_add perl git
+              has_sysdeps_support=yes
+              ;;
+            netbsd)
+              if command -v pkgin >/dev/null 2>&1; then
+                sudo pkgin -y update
+                sudo pkgin -y install perl git
+              else
+                sudo pkg_add perl git
+              fi
+              ;;
+          esac
+          echo "::endgroup::"
+
+          echo "::group::Setup CPAN environment"
+          distroprefs_opts=
+          if [ "${{ inputs.include-distroprefs }}" = 'true' ]; then
+            distroprefs_opts='--distroprefs=https://github.com/eserte/srezic-cpan-distroprefs'
+          fi
+          sysdeps_opts=
+          if [ "${{ inputs.include-sysdeps }}" = 'true' ] && [ "$has_sysdeps_support" = 'yes' ]; then
+            sysdeps_opts='--enable-sysdeps'
+          fi
+          cpan_reporter_opts=
+          if [ "${{ inputs.enable-cpan-reporter }}" = 'true' ]; then
+            cpan_reporter_opts='--enable-cpan-reporter --email-from=${{ github.actor }}@users.noreply.github.com'
+          fi
+          debug_opts=
+          if [ "${{ inputs.debug }}" = 'true' ]; then
+            debug_opts='--debug'
+          fi
+          set -ex
+          $GITHUB_WORKSPACE/ci-helper-cpan-pm/ci-helper-cpan-pm --no-test --reports-dir=$HOME/work/var/cpantesters/new $distroprefs_opts $sysdeps_opts $cpan_reporter_opts $debug_opts
+          set +x
+          echo "::endgroup::"
+
+          echo "::group::Clone target repository"
+          git clone --depth=1 https://github.com/${{ inputs.repository }}.git $GITHUB_WORKSPACE/target-module
+          cd $GITHUB_WORKSPACE/target-module
+          echo "Cloned ${{ inputs.repository }} at $(git rev-parse --short HEAD)"
+          echo "::endgroup::"
+
+          echo "::group::Detect module and install system deps"
+          MODULE_NAME=""
+          if [ -f META.json ]; then
+            MODULE_NAME=$(perl -MJSON::PP -0777 -e '
+              open my $fh, "<", "META.json" or exit;
+              my $m = JSON::PP->new->decode(do { local $/; <$fh> });
+              (my $mod = $m->{name} // "") =~ s/-/::/g;
+              print $mod;
+            ' 2>/dev/null || true)
+          fi
+          if [ -z "$MODULE_NAME" ] && [ -f META.yml ]; then
+            MODULE_NAME=$(perl -ne 'if (/^name:\s*(\S+)/) { (my $m = $1) =~ s/-/::/g; print $m; exit }' META.yml 2>/dev/null || true)
+          fi
+          echo "Detected module: ${MODULE_NAME:-unknown}"
+
+          if [ -n "$MODULE_NAME" ] && [ -n "$sysdeps_opts" ]; then
+            set +e
+            cpan-sysdeps --cpanmod "$MODULE_NAME" || true
+            cpan-sysdeps --cpanmod "$MODULE_NAME" --dry-run || true
+            set -e
+          fi
+          echo "::endgroup::"
+
+          echo "::group::Install dependencies, build, and test"
+          cd $GITHUB_WORKSPACE/target-module
+          set -ex
+
+          if [ -f Makefile.PL ]; then
+            BUILD_SYSTEM=eumm
+          elif [ -f Build.PL ]; then
+            BUILD_SYSTEM=mb
+          else
+            echo "No Makefile.PL or Build.PL found"
+            exit 1
+          fi
+
+          # Install configure-time dependencies
+          if [ -f META.json ]; then
+            CONFIGURE_DEPS=$(perl -MJSON::PP -0777 -e '
+              open my $fh, "<", "META.json" or exit;
+              my $m = JSON::PP->new->decode(do { local $/; <$fh> });
+              my %d;
+              for my $type (values %{$m->{prereqs}{configure} || {}}) {
+                $d{$_} = 1 for keys %$type;
+              }
+              delete $d{perl};
+              print join " ", sort keys %d if %d;
+            ' 2>/dev/null || true)
+            if [ -n "$CONFIGURE_DEPS" ]; then
+              cpan $CONFIGURE_DEPS
+            fi
+          fi
+
+          # Configure
+          if [ "$BUILD_SYSTEM" = "eumm" ]; then
+            perl Makefile.PL
+          else
+            perl Build.PL
+          fi
+
+          # Install runtime, build, and test dependencies
+          DEPS=$(perl -MJSON::PP -0777 -e '
+            for my $f ("MYMETA.json", "META.json") {
+              next unless -f $f;
+              open my $fh, "<", $f or next;
+              my $m = JSON::PP->new->decode(do { local $/; <$fh> });
+              my %d;
+              for my $phase (qw(runtime build test)) {
+                for my $type (values %{$m->{prereqs}{$phase} || {}}) {
+                  $d{$_} = 1 for keys %$type;
+                }
+              }
+              delete $d{perl};
+              print join " ", sort keys %d if %d;
+              exit;
+            }
+          ' 2>/dev/null || true)
+
+          if [ -n "$DEPS" ]; then
+            cpan $DEPS
+          fi
+
+          # Build and test
+          MAKE_CMD=$(perl -MConfig -e 'print $Config{make}' 2>/dev/null || echo "make")
+          if [ "$BUILD_SYSTEM" = "eumm" ]; then
+            perl Makefile.PL
+            $MAKE_CMD
+            $MAKE_CMD test
+          else
+            perl Build.PL
+            ./Build
+            ./Build test
+          fi
+          echo "::endgroup::"
+
+    - name: Upload CPAN test reports
+      if: always() && inputs.enable-cpan-reporter == true
+      uses: actions/upload-artifact@v7
+      with:
+        name: cpan-test-report-${{ matrix.operating_system }}-${{ matrix.osvers }}-${{ matrix.architecture }}
+        path: ~/work/var/cpantesters/new/*.rpt
