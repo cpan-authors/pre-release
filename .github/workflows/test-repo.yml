@@ -68,6 +68,7 @@ jobs:
       run: echo "${{ toJSON(github.event.inputs) }}"
 
     - name: "Fix sources.list for archived Debian releases"
+      if: startsWith(matrix.container, 'debian')
       run: |
         codename="$(grep VERSION_CODENAME /etc/os-release 2>/dev/null | cut -d= -f2 || true)"
         if [ "$codename" = "buster" ] || [ "$codename" = "stretch" ]; then
@@ -78,6 +79,12 @@ jobs:
           rm -f /etc/apt/sources.list.d/*
           echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until
         fi
+
+    - uses: actions/checkout@v3
+      if: matrix.container == 'debian:buster'
+
+    - uses: actions/checkout@v6
+      if: matrix.container != 'debian:buster'
 
     - uses: actions/checkout@v3
       with:
@@ -123,14 +130,13 @@ jobs:
       run: echo "$(perl -MConfig -e 'print $Config{sitebin}')" >> $GITHUB_PATH
       if: "startsWith(matrix.os, 'macos')"
 
-    - name: apt hacks
+    - name: "apt: remove conflicting packages"
+      if: "startsWith(matrix.container, 'debian') || startsWith(matrix.container || matrix.os, 'ubuntu')"
       run: |
-        if [ -d /etc/apt/sources.list.d ]; then
-          sudocmd=$( [ "$(id -u)" -ne 0 ] && echo "sudo" || echo "" )
-          $sudocmd rm -f /etc/apt/sources.list.d/*.list
-          $sudocmd apt-get update -qq
-          $sudocmd apt-get remove -y libgd3 nginx 2>/dev/null || true
-        fi
+        sudocmd=$( [ "$(id -u)" -ne 0 ] && echo "sudo" || echo "" )
+        $sudocmd rm -f /etc/apt/sources.list.d/*.list
+        $sudocmd apt-get update -qq
+        $sudocmd apt-get remove -y libgd3 nginx 2>/dev/null || true
 
     - name: Setup CPAN with sysdeps
       run: |
@@ -161,25 +167,7 @@ jobs:
 
     - name: Detect module name
       id: detect
-      run: |
-        cd $GITHUB_WORKSPACE/target-module
-        MODULE_NAME=""
-        if [ -f META.json ]; then
-          MODULE_NAME=$(perl -MJSON::PP -0777 -e '
-            open my $fh, "<", "META.json" or exit;
-            my $m = JSON::PP->new->decode(do { local $/; <$fh> });
-            (my $mod = $m->{name} // "") =~ s/-/::/g;
-            print $mod;
-          ' 2>/dev/null || true)
-        fi
-        if [ -z "$MODULE_NAME" ] && [ -f META.yml ]; then
-          MODULE_NAME=$(perl -ne 'if (/^name:\s*(\S+)/) { (my $m = $1) =~ s/-/::/g; print $m; exit }' META.yml 2>/dev/null || true)
-        fi
-        if [ -z "$MODULE_NAME" ] && [ -f Makefile.PL ]; then
-          MODULE_NAME=$(perl -ne "if (/NAME.*?=>.*?['\"]([^'\"]+)/) { print \$1; exit }" Makefile.PL 2>/dev/null || true)
-        fi
-        echo "module_name=$MODULE_NAME" >> "$GITHUB_OUTPUT"
-        echo "Detected module: ${MODULE_NAME:-unknown}"
+      run: bash $GITHUB_WORKSPACE/scripts/detect-module.sh $GITHUB_WORKSPACE/target-module
 
     - name: cpan-sysdeps check
       if: inputs.include-sysdeps && steps.detect.outputs.module_name != ''
@@ -192,78 +180,7 @@ jobs:
       run: cpan-sysdeps --cpanmod ${{ steps.detect.outputs.module_name }} --dry-run
 
     - name: Install dependencies, build, and test
-      run: |
-        cd $GITHUB_WORKSPACE/target-module
-        set -ex
-
-        # Determine build system
-        if [ -f Makefile.PL ]; then
-          BUILD_SYSTEM=eumm
-        elif [ -f Build.PL ]; then
-          BUILD_SYSTEM=mb
-        else
-          echo "::error::No Makefile.PL or Build.PL found in ${{ inputs.repository }}"
-          exit 1
-        fi
-
-        # Install configure-time dependencies from META.json/META.yml
-        if [ -f META.json ]; then
-          CONFIGURE_DEPS=$(perl -MJSON::PP -0777 -e '
-            open my $fh, "<", "META.json" or exit;
-            my $m = JSON::PP->new->decode(do { local $/; <$fh> });
-            my %d;
-            for my $type (values %{$m->{prereqs}{configure} || {}}) {
-              $d{$_} = 1 for keys %$type;
-            }
-            delete $d{perl};
-            print join " ", sort keys %d if %d;
-          ' 2>/dev/null || true)
-          if [ -n "$CONFIGURE_DEPS" ]; then
-            echo "Installing configure dependencies: $CONFIGURE_DEPS"
-            cpan $CONFIGURE_DEPS
-          fi
-        fi
-
-        # Configure (generates MYMETA with accurate dependency info)
-        if [ "$BUILD_SYSTEM" = "eumm" ]; then
-          perl Makefile.PL
-        else
-          perl Build.PL
-        fi
-
-        # Install runtime, build, and test dependencies from MYMETA
-        DEPS=$(perl -MJSON::PP -0777 -e '
-          for my $f ("MYMETA.json", "META.json") {
-            next unless -f $f;
-            open my $fh, "<", $f or next;
-            my $m = JSON::PP->new->decode(do { local $/; <$fh> });
-            my %d;
-            for my $phase (qw(runtime build test)) {
-              for my $type (values %{$m->{prereqs}{$phase} || {}}) {
-                $d{$_} = 1 for keys %$type;
-              }
-            }
-            delete $d{perl};
-            print join " ", sort keys %d if %d;
-            exit;
-          }
-        ' 2>/dev/null || true)
-
-        if [ -n "$DEPS" ]; then
-          echo "Installing dependencies: $DEPS"
-          cpan $DEPS
-        fi
-
-        # Reconfigure and build with all dependencies available
-        if [ "$BUILD_SYSTEM" = "eumm" ]; then
-          perl Makefile.PL
-          make
-          make test
-        else
-          perl Build.PL
-          ./Build
-          ./Build test
-        fi
+      run: bash $GITHUB_WORKSPACE/scripts/build-and-test.sh $GITHUB_WORKSPACE/target-module
 
     - name: Prepare artifact name
       if: always() && inputs.enable-cpan-reporter == true
@@ -298,6 +215,8 @@ jobs:
     steps:
     - name: Show inputs
       run: echo "${{ toJSON(github.event.inputs) }}"
+
+    - uses: actions/checkout@v6
 
     - uses: actions/checkout@v6
       with:
@@ -338,101 +257,21 @@ jobs:
     - name: Detect module name
       id: detect
       shell: bash
-      run: |
-        cd "$GITHUB_WORKSPACE/target-module"
-        MODULE_NAME=""
-        if [ -f META.json ]; then
-          MODULE_NAME=$(perl -MJSON::PP -0777 -e '
-            open my $fh, "<", "META.json" or exit;
-            my $m = JSON::PP->new->decode(do { local $/; <$fh> });
-            (my $mod = $m->{name} // "") =~ s/-/::/g;
-            print $mod;
-          ' 2>/dev/null || true)
-        fi
-        if [ -z "$MODULE_NAME" ] && [ -f META.yml ]; then
-          MODULE_NAME=$(perl -ne 'if (/^name:\s*(\S+)/) { (my $m = $1) =~ s/-/::/g; print $m; exit }' META.yml 2>/dev/null || true)
-        fi
-        echo "module_name=$MODULE_NAME" >> "$GITHUB_OUTPUT"
-        echo "Detected module: ${MODULE_NAME:-unknown}"
+      run: bash "$GITHUB_WORKSPACE/scripts/detect-module.sh" "$GITHUB_WORKSPACE/target-module"
 
     - name: cpan-sysdeps check
       if: inputs.include-sysdeps && steps.detect.outputs.module_name != ''
       continue-on-error: true
       run: cpan-sysdeps --cpanmod ${{ steps.detect.outputs.module_name }}
 
+    - name: cpan-sysdeps dry-run
+      if: inputs.include-sysdeps && steps.detect.outputs.module_name != ''
+      continue-on-error: true
+      run: cpan-sysdeps --cpanmod ${{ steps.detect.outputs.module_name }} --dry-run
+
     - name: Install dependencies, build, and test
       shell: bash
-      run: |
-        cd "$GITHUB_WORKSPACE/target-module"
-        set -ex
-
-        MAKE_CMD=$(perl -MConfig -e 'print $Config{make}')
-
-        if [ -f Makefile.PL ]; then
-          BUILD_SYSTEM=eumm
-        elif [ -f Build.PL ]; then
-          BUILD_SYSTEM=mb
-        else
-          echo "::error::No Makefile.PL or Build.PL found in ${{ inputs.repository }}"
-          exit 1
-        fi
-
-        # Install configure-time dependencies
-        if [ -f META.json ]; then
-          CONFIGURE_DEPS=$(perl -MJSON::PP -0777 -e '
-            open my $fh, "<", "META.json" or exit;
-            my $m = JSON::PP->new->decode(do { local $/; <$fh> });
-            my %d;
-            for my $type (values %{$m->{prereqs}{configure} || {}}) {
-              $d{$_} = 1 for keys %$type;
-            }
-            delete $d{perl};
-            print join " ", sort keys %d if %d;
-          ' 2>/dev/null || true)
-          if [ -n "$CONFIGURE_DEPS" ]; then
-            cpan $CONFIGURE_DEPS
-          fi
-        fi
-
-        # Configure
-        if [ "$BUILD_SYSTEM" = "eumm" ]; then
-          perl Makefile.PL
-        else
-          perl Build.PL
-        fi
-
-        # Install runtime, build, and test dependencies
-        DEPS=$(perl -MJSON::PP -0777 -e '
-          for my $f ("MYMETA.json", "META.json") {
-            next unless -f $f;
-            open my $fh, "<", $f or next;
-            my $m = JSON::PP->new->decode(do { local $/; <$fh> });
-            my %d;
-            for my $phase (qw(runtime build test)) {
-              for my $type (values %{$m->{prereqs}{$phase} || {}}) {
-                $d{$_} = 1 for keys %$type;
-              }
-            }
-            delete $d{perl};
-            print join " ", sort keys %d if %d;
-            exit;
-          }
-        ' 2>/dev/null || true)
-
-        if [ -n "$DEPS" ]; then
-          cpan $DEPS
-        fi
-
-        # Build and test
-        if [ "$BUILD_SYSTEM" = "eumm" ]; then
-          perl Makefile.PL
-          $MAKE_CMD
-          $MAKE_CMD test
-        else
-          perl Build.PL
-          perl Build
-          perl Build test
-        fi
+      run: bash "$GITHUB_WORKSPACE/scripts/build-and-test.sh" "$GITHUB_WORKSPACE/target-module"
 
     - name: Prepare artifact path
       if: always() && inputs.enable-cpan-reporter == true
@@ -472,6 +311,8 @@ jobs:
     steps:
     - name: Show inputs
       run: echo "${{ toJSON(github.event.inputs) }}"
+
+    - uses: actions/checkout@v6
 
     - uses: actions/checkout@v6
       with:
@@ -538,19 +379,7 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Detect module and install system deps"
-          MODULE_NAME=""
-          if [ -f META.json ]; then
-            MODULE_NAME=$(perl -MJSON::PP -0777 -e '
-              open my $fh, "<", "META.json" or exit;
-              my $m = JSON::PP->new->decode(do { local $/; <$fh> });
-              (my $mod = $m->{name} // "") =~ s/-/::/g;
-              print $mod;
-            ' 2>/dev/null || true)
-          fi
-          if [ -z "$MODULE_NAME" ] && [ -f META.yml ]; then
-            MODULE_NAME=$(perl -ne 'if (/^name:\s*(\S+)/) { (my $m = $1) =~ s/-/::/g; print $m; exit }' META.yml 2>/dev/null || true)
-          fi
-          echo "Detected module: ${MODULE_NAME:-unknown}"
+          MODULE_NAME=$(bash $GITHUB_WORKSPACE/scripts/detect-module.sh $GITHUB_WORKSPACE/target-module)
 
           if [ -n "$MODULE_NAME" ] && [ -n "$sysdeps_opts" ]; then
             set +e
@@ -561,75 +390,7 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Install dependencies, build, and test"
-          cd $GITHUB_WORKSPACE/target-module
-          set -ex
-
-          if [ -f Makefile.PL ]; then
-            BUILD_SYSTEM=eumm
-          elif [ -f Build.PL ]; then
-            BUILD_SYSTEM=mb
-          else
-            echo "No Makefile.PL or Build.PL found"
-            exit 1
-          fi
-
-          # Install configure-time dependencies
-          if [ -f META.json ]; then
-            CONFIGURE_DEPS=$(perl -MJSON::PP -0777 -e '
-              open my $fh, "<", "META.json" or exit;
-              my $m = JSON::PP->new->decode(do { local $/; <$fh> });
-              my %d;
-              for my $type (values %{$m->{prereqs}{configure} || {}}) {
-                $d{$_} = 1 for keys %$type;
-              }
-              delete $d{perl};
-              print join " ", sort keys %d if %d;
-            ' 2>/dev/null || true)
-            if [ -n "$CONFIGURE_DEPS" ]; then
-              cpan $CONFIGURE_DEPS
-            fi
-          fi
-
-          # Configure
-          if [ "$BUILD_SYSTEM" = "eumm" ]; then
-            perl Makefile.PL
-          else
-            perl Build.PL
-          fi
-
-          # Install runtime, build, and test dependencies
-          DEPS=$(perl -MJSON::PP -0777 -e '
-            for my $f ("MYMETA.json", "META.json") {
-              next unless -f $f;
-              open my $fh, "<", $f or next;
-              my $m = JSON::PP->new->decode(do { local $/; <$fh> });
-              my %d;
-              for my $phase (qw(runtime build test)) {
-                for my $type (values %{$m->{prereqs}{$phase} || {}}) {
-                  $d{$_} = 1 for keys %$type;
-                }
-              }
-              delete $d{perl};
-              print join " ", sort keys %d if %d;
-              exit;
-            }
-          ' 2>/dev/null || true)
-
-          if [ -n "$DEPS" ]; then
-            cpan $DEPS
-          fi
-
-          # Build and test
-          MAKE_CMD=$(perl -MConfig -e 'print $Config{make}' 2>/dev/null || echo "make")
-          if [ "$BUILD_SYSTEM" = "eumm" ]; then
-            perl Makefile.PL
-            $MAKE_CMD
-            $MAKE_CMD test
-          else
-            perl Build.PL
-            ./Build
-            ./Build test
-          fi
+          bash $GITHUB_WORKSPACE/scripts/build-and-test.sh $GITHUB_WORKSPACE/target-module
           echo "::endgroup::"
 
     - name: Upload CPAN test reports
