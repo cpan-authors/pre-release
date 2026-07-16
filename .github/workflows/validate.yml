@@ -18,7 +18,8 @@ jobs:
         run: bash <(curl -sS https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
 
       - name: Run actionlint
-        run: ./actionlint -color
+        # checkout@v3 is intentionally used for debian:buster (old glibc)
+        run: ./actionlint -color -ignore 'runner of "actions/checkout@v3"'
 
   shellcheck:
     runs-on: ubuntu-latest
