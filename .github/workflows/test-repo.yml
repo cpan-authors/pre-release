@@ -1,5 +1,5 @@
 name: Test CPAN Module from Repository
-run-name: Test ${{ inputs.repository }}
+run-name: "Test ${{ inputs.repository }}${{ inputs.ref && format('@{0}', inputs.ref) || '' }}"
 
 on:
   workflow_dispatch:
@@ -8,6 +8,36 @@ on:
         description: 'GitHub repository (owner/repo)'
         type: string
         required: true
+      ref:
+        description: 'Git ref to test (branch, tag, or SHA). Defaults to the repository default branch.'
+        type: string
+        default: ''
+      include-distroprefs:
+        description: 'Use CPAN distribution preferences'
+        type: boolean
+        default: true
+      include-sysdeps:
+        description: 'Use cpan-sysdeps plugin for system dependencies'
+        type: boolean
+        default: true
+      enable-cpan-reporter:
+        description: 'Send test reports to CPAN Testers'
+        type: boolean
+        default: false
+      debug:
+        description: 'Enable debug output'
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      repository:
+        description: 'GitHub repository (owner/repo)'
+        type: string
+        required: true
+      ref:
+        description: 'Git ref to test (branch, tag, or SHA). Defaults to the repository default branch.'
+        type: string
+        default: ''
       include-distroprefs:
         description: 'Use CPAN distribution preferences'
         type: boolean
@@ -160,10 +190,18 @@ jobs:
         $GITHUB_WORKSPACE/ci-helper-cpan-pm/ci-helper-cpan-pm --no-test $distroprefs_opts $sysdeps_opts $cpan_reporter_opts $debug_opts
 
     - name: Clone target repository
+      env:
+        INPUT_REF: ${{ inputs.ref }}
+        INPUT_REPO: ${{ inputs.repository }}
       run: |
-        git clone --depth=1 https://github.com/${{ inputs.repository }}.git $GITHUB_WORKSPACE/target-module
-        cd $GITHUB_WORKSPACE/target-module
-        echo "Cloned ${{ inputs.repository }} at $(git rev-parse --short HEAD) on branch $(git branch --show-current || git rev-parse --abbrev-ref HEAD)"
+        if [ -n "$INPUT_REF" ]; then
+          git clone --branch "$INPUT_REF" --depth=1 "https://github.com/${INPUT_REPO}.git" "$GITHUB_WORKSPACE/target-module" 2>/dev/null \
+            || { git clone "https://github.com/${INPUT_REPO}.git" "$GITHUB_WORKSPACE/target-module" && git -C "$GITHUB_WORKSPACE/target-module" checkout "$INPUT_REF"; }
+        else
+          git clone --depth=1 "https://github.com/${INPUT_REPO}.git" "$GITHUB_WORKSPACE/target-module"
+        fi
+        cd "$GITHUB_WORKSPACE/target-module"
+        echo "Cloned ${INPUT_REPO} at $(git rev-parse --short HEAD) ref=${INPUT_REF:-default}"
 
     - name: Detect module name
       id: detect
@@ -251,8 +289,20 @@ jobs:
       shell: powershell
 
     - name: Clone target repository
+      env:
+        INPUT_REF: ${{ inputs.ref }}
+        INPUT_REPO: ${{ inputs.repository }}
       run: |
-        git clone --depth=1 https://github.com/${{ inputs.repository }}.git $env:GITHUB_WORKSPACE\target-module
+        $ref = $env:INPUT_REF
+        if ($ref -ne "") {
+          $result = git clone --branch $ref --depth=1 "https://github.com/${env:INPUT_REPO}.git" "$env:GITHUB_WORKSPACE\target-module" 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            git clone "https://github.com/${env:INPUT_REPO}.git" "$env:GITHUB_WORKSPACE\target-module"
+            git -C "$env:GITHUB_WORKSPACE\target-module" checkout $ref
+          }
+        } else {
+          git clone --depth=1 "https://github.com/${env:INPUT_REPO}.git" "$env:GITHUB_WORKSPACE\target-module"
+        }
 
     - name: Detect module name
       id: detect
@@ -320,6 +370,9 @@ jobs:
         path: ci-helper-cpan-pm
 
     - uses: cross-platform-actions/action@v0.32.0
+      env:
+        INPUT_REF: ${{ inputs.ref }}
+        INPUT_REPO: ${{ inputs.repository }}
       with:
         operating_system: '${{ matrix.operating_system }}'
         version: '${{ matrix.osvers }}'
@@ -373,9 +426,14 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Clone target repository"
-          git clone --depth=1 https://github.com/${{ inputs.repository }}.git $GITHUB_WORKSPACE/target-module
-          cd $GITHUB_WORKSPACE/target-module
-          echo "Cloned ${{ inputs.repository }} at $(git rev-parse --short HEAD)"
+          if [ -n "$INPUT_REF" ]; then
+            git clone --branch "$INPUT_REF" --depth=1 "https://github.com/${INPUT_REPO}.git" "$GITHUB_WORKSPACE/target-module" 2>/dev/null \
+              || { git clone "https://github.com/${INPUT_REPO}.git" "$GITHUB_WORKSPACE/target-module" && git -C "$GITHUB_WORKSPACE/target-module" checkout "$INPUT_REF"; }
+          else
+            git clone --depth=1 "https://github.com/${INPUT_REPO}.git" "$GITHUB_WORKSPACE/target-module"
+          fi
+          cd "$GITHUB_WORKSPACE/target-module"
+          echo "Cloned ${INPUT_REPO} at $(git rev-parse --short HEAD) ref=${INPUT_REF:-default}"
           echo "::endgroup::"
 
           echo "::group::Detect module and install system deps"
