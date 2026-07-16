@@ -19,7 +19,7 @@ jobs:
 
       - name: Run actionlint
         # checkout@v3 is intentionally used for debian:buster (old glibc)
-        run: ./actionlint -color -ignore 'runner of "actions/checkout@v3"'
+        run: ./actionlint -color -ignore 'checkout@v3'
 
   shellcheck:
     runs-on: ubuntu-latest
