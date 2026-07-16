@@ -1,0 +1,427 @@
+name: Test CPAN Module
+run-name: "Test ${{ inputs.module }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      module:
+        description: 'CPAN module name (e.g., XML::LibXML)'
+        type: string
+        required: true
+      include-distroprefs:
+        description: 'Use CPAN distribution preferences'
+        type: boolean
+        default: true
+      include-sysdeps:
+        description: 'Use cpan-sysdeps plugin for system dependencies'
+        type: boolean
+        default: true
+      enable-cpan-reporter:
+        description: 'Send test reports to CPAN Testers'
+        type: boolean
+        default: false
+      debug:
+        description: 'Enable debug output'
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      module:
+        description: 'CPAN module name (e.g., XML::LibXML)'
+        type: string
+        required: true
+      include-distroprefs:
+        description: 'Use CPAN distribution preferences'
+        type: boolean
+        default: true
+      include-sysdeps:
+        description: 'Use cpan-sysdeps plugin for system dependencies'
+        type: boolean
+        default: true
+      enable-cpan-reporter:
+        description: 'Send test reports to CPAN Testers'
+        type: boolean
+        default: false
+      debug:
+        description: 'Enable debug output'
+        type: boolean
+        default: false
+
+jobs:
+  test-module:
+    name: on ${{ matrix.container || matrix.os }}
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: 'macos-14'
+          - os: 'macos-15'
+          - os: 'ubuntu-22.04'
+          - os: 'ubuntu-24.04'
+          - os: 'ubuntu-latest'
+            container: ubuntu:20.04
+          - os: 'ubuntu-latest'
+            container: ubuntu:24.04
+          - os: 'ubuntu-latest'
+            container: fedora:38
+          - os: 'ubuntu-latest'
+            container: fedora:43
+          - os: 'ubuntu-latest'
+            container: rockylinux:9
+          - os: 'ubuntu-latest'
+            container: debian:buster
+          - os: 'ubuntu-latest'
+            container: debian:bullseye
+          - os: 'ubuntu-latest'
+            container: debian:bookworm
+          - os: 'ubuntu-latest'
+            container: debian:trixie
+          - os: 'ubuntu-latest'
+            container: alpine:3.23
+
+    env:
+      MODULE: ${{ inputs.module }}
+
+    steps:
+    - name: Show inputs
+      run: echo "${{ toJSON(github.event.inputs) }}"
+
+    - name: Fix sources.list for archived Debian releases
+      if: matrix.container == 'debian:buster'
+      run: |
+        cat > /etc/apt/sources.list <<EOF
+        deb http://archive.debian.org/debian buster main contrib non-free
+        deb http://archive.debian.org/debian-security buster/updates main contrib non-free
+        EOF
+        rm -f /etc/apt/sources.list.d/*
+        echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until
+
+    - uses: actions/checkout@v3
+      with:
+        repository: eserte/ci-helper-cpan-pm
+        path: ci-helper-cpan-pm
+      if: matrix.container == 'debian:buster'
+
+    - uses: actions/checkout@v6
+      with:
+        repository: eserte/ci-helper-cpan-pm
+        path: ci-helper-cpan-pm
+      if: matrix.container != 'debian:buster'
+
+    - name: "Rocky Linux: setup repositories"
+      if: startsWith(matrix.container, 'rockylinux')
+      run: |
+        dnf clean all
+        rm -rf /var/cache/yum
+        dnf update -y
+        dnf install -y dnf-plugins-core
+        dnf config-manager --set-enabled crb
+
+    - name: "rpm-based: install perl, git, build tools"
+      if: startsWith(matrix.container, 'fedora') || startsWith(matrix.container, 'rockylinux')
+      run: |
+        dnf -y install "perl(CPAN)" "perl(Test::More)" "perl(Parse::CPAN::Meta)" \
+          git make gcc patch glibc-devel
+
+    - name: "apt-based: install perl, git, build tools"
+      if: startsWith(matrix.container, 'debian') || startsWith(matrix.container || matrix.os, 'ubuntu')
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudocmd=$( [ "$(id -u)" -ne 0 ] && echo "sudo" || echo "" )
+        $sudocmd apt-get update -yq && $sudocmd apt-get install -yqq perl git make gcc g++
+        echo "DEBIAN_FRONTEND=noninteractive" >> "$GITHUB_ENV"
+
+    - name: "apk-based: install perl, git, build tools"
+      if: startsWith(matrix.container, 'alpine')
+      run: apk update -q && apk add -q perl perl-dev perl-utils git build-base wget patch
+
+    - name: "macOS: add Perl site bin to PATH"
+      if: startsWith(matrix.os, 'macos')
+      run: echo "$(perl -MConfig -e 'print $Config{sitebin}')" >> $GITHUB_PATH
+
+    - name: Remove conflicting apt packages
+      if: startsWith(matrix.container, 'debian') || startsWith(matrix.container || matrix.os, 'ubuntu')
+      run: |
+        sudocmd=$( [ "$(id -u)" -ne 0 ] && echo "sudo" || echo "" )
+        $sudocmd rm -f /etc/apt/sources.list.d/*.list
+        $sudocmd apt-get update -qq
+        $sudocmd apt-get remove -y libgd3 nginx 2>/dev/null || true
+
+    - name: Setup CPAN
+      run: |
+        distroprefs_opts=
+        if [ "${{ inputs.include-distroprefs }}" = 'true' ]; then
+          distroprefs_opts='--distroprefs=https://github.com/eserte/srezic-cpan-distroprefs'
+        fi
+        sysdeps_opts=
+        if [ "${{ inputs.include-sysdeps }}" = 'true' ]; then
+          sysdeps_opts='--enable-sysdeps'
+        fi
+        cpan_reporter_opts=
+        if [ "${{ inputs.enable-cpan-reporter }}" = 'true' ]; then
+          cpan_reporter_opts='--enable-cpan-reporter --email-from=${{ github.actor }}@users.noreply.github.com'
+        fi
+        debug_opts=
+        if [ "${{ inputs.debug }}" = 'true' ]; then
+          debug_opts='--debug'
+        fi
+        set -ex
+        $GITHUB_WORKSPACE/ci-helper-cpan-pm/ci-helper-cpan-pm --no-test $distroprefs_opts $sysdeps_opts $cpan_reporter_opts $debug_opts
+
+    - name: Install system dependencies
+      if: inputs.include-sysdeps
+      continue-on-error: true
+      run: |
+        cpan-sysdeps --cpanmod "$MODULE" || true
+        cpan-sysdeps --cpanmod "$MODULE" --dry-run || true
+
+    - name: Install cpanm
+      run: cpan App::cpanminus
+
+    - name: Test module
+      run: |
+        set -ex
+        cpanm -v "$MODULE"
+
+    - name: Show installed version
+      if: success()
+      run: |
+        perl -e '
+          my $m = $ENV{MODULE};
+          (my $f = "$m.pm") =~ s{::}{/}g;
+          require $f;
+          printf "%s %s\n", $m, $m->VERSION // "?";
+        '
+
+    - name: Prepare artifact name
+      if: always() && inputs.enable-cpan-reporter == true
+      id: artifact-name
+      shell: sh
+      run: |
+        if [ -n "${{ matrix.container }}" ]; then
+          NAME="${{ matrix.container }}"
+        else
+          NAME="${{ matrix.os }}"
+        fi
+        NAME=$(echo "$NAME" | tr ':' '_')
+        echo "artifact_name=cpan-test-report-$NAME" >> $GITHUB_OUTPUT
+
+    - name: Upload CPAN test reports
+      if: always() && inputs.enable-cpan-reporter == true
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ steps.artifact-name.outputs.artifact_name }}
+        path: ~/var/cpantesters/new/*.rpt
+
+  test-module-windows:
+    name: on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: 'windows-2022'
+          - os: 'windows-2025'
+
+    env:
+      MODULE: ${{ inputs.module }}
+
+    steps:
+    - name: Show inputs
+      run: echo "${{ toJSON(github.event.inputs) }}"
+
+    - uses: actions/checkout@v6
+      with:
+        repository: eserte/ci-helper-cpan-pm
+        path: ci-helper-cpan-pm
+
+    - name: Setup CPAN
+      run: |
+        $distroprefs_opts = ""
+        if ("${{ inputs.include-distroprefs }}" -eq "true") {
+          $distroprefs_opts = "--distroprefs=https://github.com/eserte/srezic-cpan-distroprefs"
+        }
+        $sysdeps_opts = ""
+        if ("${{ inputs.include-sysdeps }}" -eq "true") {
+          $sysdeps_opts = "--enable-sysdeps"
+        }
+        $cpan_reporter_opts = ""
+        if ("${{ inputs.enable-cpan-reporter }}" -eq "true") {
+          $cpan_reporter_opts = "--enable-cpan-reporter --email-from=${{ github.actor }}@users.noreply.github.com"
+        }
+        $debug_opts = ""
+        if ("${{ inputs.debug }}" -eq "true") {
+          $debug_opts = "--debug"
+        }
+        $ci_helper_cmd = "perl $env:GITHUB_WORKSPACE\ci-helper-cpan-pm\ci-helper-cpan-pm --no-test $distroprefs_opts $sysdeps_opts $cpan_reporter_opts $debug_opts"
+        Write-Host $ci_helper_cmd
+        Invoke-Expression $ci_helper_cmd
+
+    - name: Prepend Strawberry Perl to PATH
+      run: |
+        echo "C:\Strawberry\c\bin;C:\Strawberry\perl\site\bin;C:\Strawberry\perl\bin;$env:PATH" > $env:GITHUB_PATH
+      shell: powershell
+
+    - name: Install system dependencies
+      if: inputs.include-sysdeps
+      continue-on-error: true
+      shell: bash
+      run: cpan-sysdeps --cpanmod "$MODULE" --dry-run || true
+
+    - name: Install cpanm
+      shell: bash
+      run: cpan App::cpanminus
+
+    - name: Test module
+      shell: bash
+      run: |
+        set -ex
+        cpanm -v "$MODULE"
+
+    - name: Show installed version
+      if: success()
+      shell: bash
+      run: |
+        perl -e '
+          my $m = $ENV{MODULE};
+          (my $f = "$m.pm") =~ s{::}{/}g;
+          require $f;
+          printf "%s %s\n", $m, $m->VERSION // "?";
+        '
+
+    - name: Prepare artifact path
+      if: always() && inputs.enable-cpan-reporter == true
+      id: artifact-path
+      run: echo "userprofile=$env:USERPROFILE" >> $env:GITHUB_OUTPUT
+
+    - name: Upload CPAN test reports
+      if: always() && inputs.enable-cpan-reporter == true
+      uses: actions/upload-artifact@v7
+      with:
+        name: cpan-test-report-${{ matrix.os }}
+        path: ${{ steps.artifact-path.outputs.userprofile }}\\var\\cpantesters\\new\\*.rpt
+
+  test-module-bsd:
+    name: on ${{ matrix.operating_system }} ${{ matrix.osvers }} ${{ matrix.architecture }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - operating_system: freebsd
+            osvers: '15.0'
+            architecture: 'x86-64'
+          - operating_system: freebsd
+            osvers: '14.3'
+            architecture: 'x86-64'
+          - operating_system: freebsd
+            osvers: '13.5'
+            architecture: 'x86-64'
+          - operating_system: openbsd
+            osvers: '7.8'
+            architecture: 'x86-64'
+          - operating_system: netbsd
+            osvers: '10.1'
+            architecture: 'x86-64'
+
+    env:
+      MODULE: ${{ inputs.module }}
+
+    steps:
+    - name: Show inputs
+      run: echo "${{ toJSON(github.event.inputs) }}"
+
+    - uses: actions/checkout@v6
+      with:
+        repository: eserte/ci-helper-cpan-pm
+        path: ci-helper-cpan-pm
+
+    - uses: cross-platform-actions/action@v0.32.0
+      env:
+        MODULE: ${{ inputs.module }}
+      with:
+        operating_system: '${{ matrix.operating_system }}'
+        version: '${{ matrix.osvers }}'
+        architecture: '${{ matrix.architecture }}'
+        shell: bash
+        run: |
+          echo "::group::Install system prerequisites"
+          has_sysdeps_support=no
+          case "${{ matrix.operating_system }}" in
+            freebsd)
+              sudo pkg update
+              sudo pkg install -y perl5 git
+              has_sysdeps_support=yes
+              ;;
+            openbsd)
+              sudo pkg_add -u
+              sudo pkg_add perl git
+              has_sysdeps_support=yes
+              ;;
+            netbsd)
+              if command -v pkgin >/dev/null 2>&1; then
+                sudo pkgin -y update
+                sudo pkgin -y install perl git
+              else
+                sudo pkg_add perl git
+              fi
+              ;;
+          esac
+          echo "::endgroup::"
+
+          echo "::group::Setup CPAN environment"
+          distroprefs_opts=
+          if [ "${{ inputs.include-distroprefs }}" = 'true' ]; then
+            distroprefs_opts='--distroprefs=https://github.com/eserte/srezic-cpan-distroprefs'
+          fi
+          sysdeps_opts=
+          if [ "${{ inputs.include-sysdeps }}" = 'true' ] && [ "$has_sysdeps_support" = 'yes' ]; then
+            sysdeps_opts='--enable-sysdeps'
+          fi
+          cpan_reporter_opts=
+          if [ "${{ inputs.enable-cpan-reporter }}" = 'true' ]; then
+            cpan_reporter_opts='--enable-cpan-reporter --email-from=${{ github.actor }}@users.noreply.github.com'
+          fi
+          debug_opts=
+          if [ "${{ inputs.debug }}" = 'true' ]; then
+            debug_opts='--debug'
+          fi
+          set -ex
+          $GITHUB_WORKSPACE/ci-helper-cpan-pm/ci-helper-cpan-pm --no-test --reports-dir=$HOME/work/var/cpantesters/new $distroprefs_opts $sysdeps_opts $cpan_reporter_opts $debug_opts
+          set +x
+          echo "::endgroup::"
+
+          echo "::group::Install system dependencies"
+          if [ -n "$sysdeps_opts" ]; then
+            cpan-sysdeps --cpanmod "$MODULE" || true
+            cpan-sysdeps --cpanmod "$MODULE" --dry-run || true
+          fi
+          echo "::endgroup::"
+
+          echo "::group::Install cpanm"
+          cpan App::cpanminus
+          echo "::endgroup::"
+
+          echo "::group::Test module"
+          set -ex
+          cpanm -v "$MODULE"
+          echo "::endgroup::"
+
+          echo "::group::Show installed version"
+          perl -e '
+            my $m = $ENV{MODULE};
+            (my $f = "$m.pm") =~ s{::}{/}g;
+            require $f;
+            printf "%s %s\n", $m, $m->VERSION // "?";
+          ' || true
+          echo "::endgroup::"
+
+    - name: Upload CPAN test reports
+      if: always() && inputs.enable-cpan-reporter == true
+      uses: actions/upload-artifact@v7
+      with:
+        name: cpan-test-report-${{ matrix.operating_system }}-${{ matrix.osvers }}-${{ matrix.architecture }}
+        path: ~/work/var/cpantesters/new/*.rpt
