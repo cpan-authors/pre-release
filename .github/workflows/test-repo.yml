@@ -338,8 +338,8 @@ jobs:
         rm -f /usr/bin/perl /usr/bin/perl.exe 2>/dev/null || true
         # Create cpan wrapper since cpan.bat isn't executable from bash
         if ! command -v cpan &>/dev/null; then
-          printf '#!/bin/bash\nexec perl -S cpan "$@"\n' > /usr/local/bin/cpan
-          chmod +x /usr/local/bin/cpan
+          printf '#!/bin/bash\nexec perl -S cpan "$@"\n' > /usr/bin/cpan
+          chmod +x /usr/bin/cpan
         fi
 
     - name: Clone target repository
