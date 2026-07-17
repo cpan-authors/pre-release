@@ -31,6 +31,7 @@ if [ -f META.json ]; then
   ' 2>/dev/null || true)
   if [ -n "$CONFIGURE_DEPS" ]; then
     echo "Installing configure dependencies: $CONFIGURE_DEPS"
+    # shellcheck disable=SC2086 -- intentional word splitting: space-separated module list
     cpan $CONFIGURE_DEPS
   fi
 fi
@@ -62,6 +63,7 @@ DEPS=$(perl -MJSON::PP -0777 -e '
 
 if [ -n "$DEPS" ]; then
   echo "Installing dependencies: $DEPS"
+  # shellcheck disable=SC2086 -- intentional word splitting: space-separated module list
   cpan $DEPS
 fi
 
