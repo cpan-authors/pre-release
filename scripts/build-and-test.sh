@@ -32,7 +32,7 @@ if [ -f META.json ]; then
   if [ -n "$CONFIGURE_DEPS" ]; then
     echo "Installing configure dependencies: $CONFIGURE_DEPS"
     # shellcheck disable=SC2086
-    cpan $CONFIGURE_DEPS
+    perl -S cpan $CONFIGURE_DEPS
   fi
 fi
 
@@ -64,7 +64,7 @@ DEPS=$(perl -MJSON::PP -0777 -e '
 if [ -n "$DEPS" ]; then
   echo "Installing dependencies: $DEPS"
   # shellcheck disable=SC2086
-  cpan $DEPS
+  perl -S cpan $DEPS
 fi
 
 # Reconfigure with all deps, build, and test

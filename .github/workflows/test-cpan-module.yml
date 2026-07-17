@@ -269,8 +269,13 @@ jobs:
 
     - name: Prepend Strawberry Perl to PATH
       run: |
-        echo "C:\Strawberry\c\bin;C:\Strawberry\perl\site\bin;C:\Strawberry\perl\bin;$env:PATH" > $env:GITHUB_PATH
+        echo "C:\Strawberry\c\bin;C:\Strawberry\perl\site\bin;C:\Strawberry\perl\bin" >> $env:GITHUB_PATH
       shell: powershell
+
+    - name: Fix Perl PATH for bash on Windows
+      shell: bash
+      run: |
+        rm -f /usr/bin/perl /usr/bin/perl.exe 2>/dev/null || true
 
     - name: Install system dependencies
       if: inputs.include-sysdeps
@@ -280,7 +285,7 @@ jobs:
 
     - name: Install cpanm
       shell: bash
-      run: cpan App::cpanminus
+      run: perl -S cpan App::cpanminus
 
     - name: Test module
       shell: bash
@@ -361,7 +366,7 @@ jobs:
           has_sysdeps_support=no
           case "${{ matrix.operating_system }}" in
             freebsd)
-              sudo pkg update
+              sudo env IGNORE_OSVERSION=yes pkg update
               sudo pkg install -y perl5 git
               has_sysdeps_support=yes
               ;;
@@ -411,7 +416,7 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Install cpanm"
-          cpan App::cpanminus
+          perl -S cpan App::cpanminus
           echo "::endgroup::"
 
           echo "::group::Test module"
