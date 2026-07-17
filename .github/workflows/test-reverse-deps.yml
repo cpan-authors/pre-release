@@ -1,0 +1,208 @@
+name: Test Reverse Dependencies
+run-name: "Reverse deps: ${{ inputs.module || inputs.repository }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      module:
+        description: 'CPAN module name (e.g., JSON::PP). Auto-detected from repository if empty.'
+        type: string
+        default: ''
+      repository:
+        description: 'GitHub repo (owner/repo) to install from source. Leave empty to use CPAN release.'
+        type: string
+        default: ''
+      ref:
+        description: 'Git ref (branch/tag/SHA) when installing from repository'
+        type: string
+        default: ''
+      max-deps:
+        description: 'Max reverse dependencies to test (0 = all, capped at 200)'
+        type: number
+        default: 20
+      perl-version:
+        description: 'Perl version'
+        type: string
+        default: 'latest'
+
+jobs:
+  test-reverse-deps:
+    runs-on: ubuntu-latest
+    name: Test reverse deps
+    timeout-minutes: 180
+    steps:
+    - name: Validate inputs
+      env:
+        INPUT_MODULE: ${{ inputs.module }}
+        INPUT_REPO: ${{ inputs.repository }}
+      run: |
+        if [ -z "$INPUT_MODULE" ] && [ -z "$INPUT_REPO" ]; then
+          echo "::error::Provide either 'module' or 'repository' input"
+          exit 1
+        fi
+
+    - uses: shogo82148/actions-setup-perl@v1
+      with:
+        perl-version: ${{ inputs.perl-version }}
+
+    - name: Install module from source
+      if: inputs.repository != ''
+      env:
+        REPO: ${{ inputs.repository }}
+        REF: ${{ inputs.ref }}
+      run: |
+        if [ -n "$REF" ]; then
+          git clone "https://github.com/${REPO}.git" module-under-test
+          cd module-under-test
+          git checkout "$REF"
+        else
+          git clone --depth=1 "https://github.com/${REPO}.git" module-under-test
+          cd module-under-test
+        fi
+        cpanm --notest --installdeps . || { echo "::error::Failed to install dependencies"; exit 1; }
+        cpanm --notest . || { echo "::error::Failed to install module from source"; exit 1; }
+
+    - name: Detect distribution name
+      id: detect
+      env:
+        INPUT_MODULE: ${{ inputs.module }}
+      run: |
+        if [ -n "$INPUT_MODULE" ]; then
+          DIST_NAME=$(echo "$INPUT_MODULE" | sed 's/::/-/g')
+          echo "module_name=$INPUT_MODULE" >> "$GITHUB_OUTPUT"
+          echo "dist_name=$DIST_NAME" >> "$GITHUB_OUTPUT"
+          echo "Module: $INPUT_MODULE (dist: $DIST_NAME)"
+          exit 0
+        fi
+
+        cd module-under-test
+        if [ -f META.json ]; then
+          perl -MJSON::PP -0777 -e '
+            open my $fh, "<", "META.json" or exit;
+            my $m = JSON::PP->new->decode(do { local $/; <$fh> });
+            my $d = $m->{name} // "";
+            (my $mod = $d) =~ s/-/::/g;
+            open my $out, ">>", $ENV{GITHUB_OUTPUT} or die;
+            print $out "dist_name=$d\n";
+            print $out "module_name=$mod\n";
+            print "Module: $mod (dist: $d)\n";
+          '
+          if grep -q "dist_name=" "$GITHUB_OUTPUT"; then exit 0; fi
+        fi
+
+        if [ -f META.yml ]; then
+          DIST_NAME=$(perl -ne 'if (/^name:\s*(\S+)/) { print $1; exit }' META.yml)
+          MODULE_NAME=$(echo "$DIST_NAME" | sed 's/-/::/g')
+          echo "dist_name=$DIST_NAME" >> "$GITHUB_OUTPUT"
+          echo "module_name=$MODULE_NAME" >> "$GITHUB_OUTPUT"
+          echo "Module: $MODULE_NAME (dist: $DIST_NAME)"
+          exit 0
+        fi
+
+        echo "::error::Could not detect distribution name. Provide 'module' input."
+        exit 1
+
+    - name: Install module from CPAN
+      if: inputs.repository == ''
+      env:
+        MODULE: ${{ steps.detect.outputs.module_name }}
+      run: cpanm --notest "$MODULE" || { echo "::error::Failed to install $MODULE from CPAN"; exit 1; }
+
+    - name: Fetch and test reverse dependencies
+      env:
+        DIST_NAME: ${{ steps.detect.outputs.dist_name }}
+        MODULE_NAME: ${{ steps.detect.outputs.module_name }}
+        MAX_DEPS: ${{ inputs.max-deps }}
+      run: |
+        SIZE=${MAX_DEPS:-20}
+        if [ "$SIZE" -eq 0 ]; then SIZE=200; fi
+
+        echo "Fetching reverse dependencies for $DIST_NAME from MetaCPAN..."
+        REVDEPS_JSON=$(curl -sf "https://fastapi.metacpan.org/v1/reverse_dependencies/dist/${DIST_NAME}?size=${SIZE}&sort=date:desc") || {
+          echo "::error::Failed to fetch reverse dependencies from MetaCPAN"
+          exit 1
+        }
+
+        REVDEPS=$(echo "$REVDEPS_JSON" | perl -MJSON::PP -0777 -e '
+          my $d = JSON::PP->new->decode(do { local $/; <STDIN> });
+          for my $r (@{$d->{data} || []}) {
+            next unless $r->{distribution};
+            next if $r->{distribution} eq $ENV{DIST_NAME};
+            print $r->{distribution}, "\n";
+          }
+        ' | sort -u)
+
+        if [ -z "$REVDEPS" ]; then
+          echo "No reverse dependencies found for $DIST_NAME"
+          {
+            echo "## Reverse Dependency Test Results"
+            echo ""
+            echo "**Module:** \`${MODULE_NAME}\` (\`${DIST_NAME}\`)"
+            echo ""
+            echo "No reverse dependencies found on MetaCPAN."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        TOTAL=$(echo "$REVDEPS" | wc -l | tr -d ' ')
+        echo "Found $TOTAL reverse dependencies to test"
+        echo ""
+
+        {
+          echo "## Reverse Dependency Test Results"
+          echo ""
+          echo "**Module:** \`${MODULE_NAME}\` (\`${DIST_NAME}\`)"
+          echo "**Perl:** $(perl -v | head -2 | tail -1)"
+          echo ""
+          echo "| # | Distribution | Result |"
+          echo "|--:|-------------|:------:|"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        PASS=0
+        FAIL=0
+        N=0
+
+        while IFS= read -r dep; do
+          [ -z "$dep" ] && continue
+          N=$((N + 1))
+          DEP_MOD=$(echo "$dep" | sed 's/-/::/g')
+
+          echo "::group::[$N/$TOTAL] $dep ($DEP_MOD)"
+
+          log=$(mktemp)
+          timeout 120 cpanm --notest --installdeps "$DEP_MOD" > "$log" 2>&1 || true
+
+          if timeout 600 cpanm -v --test-only "$DEP_MOD" >> "$log" 2>&1; then
+            echo "PASS: $dep"
+            echo "| $N | \`$dep\` | PASS |" >> "$GITHUB_STEP_SUMMARY"
+            PASS=$((PASS + 1))
+          else
+            echo "FAIL: $dep"
+            tail -20 "$log"
+            echo "| $N | \`$dep\` | FAIL |" >> "$GITHUB_STEP_SUMMARY"
+            FAIL=$((FAIL + 1))
+          fi
+          rm -f "$log"
+
+          echo "::endgroup::"
+        done <<< "$REVDEPS"
+
+        {
+          echo ""
+          echo "---"
+          echo "**Summary:** ${PASS} passed, ${FAIL} failed out of ${TOTAL} tested"
+          if [ "$FAIL" -gt 0 ]; then
+            echo ""
+            echo "> ${FAIL} reverse dependencies failed. Expand the failed groups above for details."
+          else
+            echo ""
+            echo "> All reverse dependencies pass — safe to release."
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        echo ""
+        echo "=== Results: $PASS passed, $FAIL failed out of $TOTAL ==="
+
+        if [ "$FAIL" -gt 0 ]; then
+          echo "::warning::$FAIL of $TOTAL reverse dependencies failed their tests"
+        fi

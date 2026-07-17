@@ -1,0 +1,106 @@
+name: Test CPAN Module across Perl Versions
+run-name: "Test ${{ inputs.repository }} across Perl versions"
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: 'GitHub repository (owner/repo)'
+        type: string
+        required: true
+      ref:
+        description: 'Branch, tag, or SHA to test (default: default branch)'
+        type: string
+        default: ''
+  workflow_call:
+    inputs:
+      repository:
+        type: string
+        required: true
+      ref:
+        type: string
+        default: ''
+
+jobs:
+  test:
+    name: "Perl ${{ matrix.perl }} on ${{ matrix.os }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        perl:
+          - '5.40'
+          - '5.38'
+          - '5.36'
+          - '5.34'
+          - '5.32'
+          - '5.30'
+          - '5.28'
+          - '5.26'
+          - '5.24'
+          - '5.22'
+          - '5.20'
+          - '5.18'
+          - '5.16'
+          - '5.14'
+        include:
+          - os: macos-latest
+            perl: '5.40'
+          - os: macos-latest
+            perl: '5.20'
+          - os: windows-latest
+            perl: '5.40'
+          - os: windows-latest
+            perl: '5.20'
+
+    steps:
+      - uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: ${{ matrix.perl }}
+
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.repository }}
+          ref: ${{ inputs.ref }}
+          path: target-module
+
+      - name: Install dependencies, build, and test
+        shell: bash
+        working-directory: target-module
+        env:
+          REPO: ${{ inputs.repository }}
+        run: |
+          set -ex
+          MAKE_CMD=$(perl -MConfig -e 'print $Config{make}')
+
+          if [ -f Makefile.PL ]; then
+            BUILD_SYSTEM=eumm
+          elif [ -f Build.PL ]; then
+            BUILD_SYSTEM=mb
+          else
+            echo "::error::No Makefile.PL or Build.PL found in ${REPO}"
+            exit 1
+          fi
+
+          # Install configure-time deps from META (may not exist yet)
+          cpanm --notest --installdeps . || true
+
+          # Configure — generates MYMETA with full dependency info
+          if [ "$BUILD_SYSTEM" = "eumm" ]; then
+            perl Makefile.PL
+          else
+            perl Build.PL
+          fi
+
+          # Install all deps from MYMETA
+          cpanm --notest --installdeps .
+
+          # Build and test
+          if [ "$BUILD_SYSTEM" = "eumm" ]; then
+            $MAKE_CMD
+            $MAKE_CMD test
+          else
+            perl Build
+            perl Build test
+          fi

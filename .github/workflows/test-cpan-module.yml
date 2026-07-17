@@ -1,17 +1,13 @@
-name: Test CPAN Module from Repository
-run-name: "Test ${{ inputs.repository }}${{ inputs.ref && format('@{0}', inputs.ref) || '' }}"
+name: Test CPAN Module
+run-name: "Test ${{ inputs.module }}"
 
 on:
   workflow_dispatch:
     inputs:
-      repository:
-        description: 'GitHub repository (owner/repo)'
+      module:
+        description: 'CPAN module name (e.g., XML::LibXML)'
         type: string
         required: true
-      ref:
-        description: 'Git ref to test (branch, tag, or SHA). Defaults to the repository default branch.'
-        type: string
-        default: ''
       include-distroprefs:
         description: 'Use CPAN distribution preferences'
         type: boolean
@@ -30,14 +26,10 @@ on:
         default: false
   workflow_call:
     inputs:
-      repository:
-        description: 'GitHub repository (owner/repo)'
+      module:
+        description: 'CPAN module name (e.g., XML::LibXML)'
         type: string
         required: true
-      ref:
-        description: 'Git ref to test (branch, tag, or SHA). Defaults to the repository default branch.'
-        type: string
-        default: ''
       include-distroprefs:
         description: 'Use CPAN distribution preferences'
         type: boolean
@@ -65,13 +57,9 @@ jobs:
       matrix:
         include:
           - os: 'macos-14'
-            container: ~
           - os: 'macos-15'
-            container: ~
           - os: 'ubuntu-22.04'
-            container: ~
           - os: 'ubuntu-24.04'
-            container: ~
           - os: 'ubuntu-latest'
             container: ubuntu:20.04
           - os: 'ubuntu-latest'
@@ -93,30 +81,24 @@ jobs:
           - os: 'ubuntu-latest'
             container: alpine:3.23
 
+    env:
+      MODULE: ${{ inputs.module }}
+
     steps:
     - name: Show inputs
       env:
         INPUTS_JSON: ${{ toJSON(github.event.inputs) }}
       run: echo "$INPUTS_JSON"
 
-    - name: "Fix sources.list for archived Debian releases"
-      if: startsWith(matrix.container, 'debian')
-      run: |
-        codename="$(grep VERSION_CODENAME /etc/os-release 2>/dev/null | cut -d= -f2 || true)"
-        if [ "$codename" = "buster" ] || [ "$codename" = "stretch" ]; then
-          cat > /etc/apt/sources.list <<EOF
-        deb http://archive.debian.org/debian $codename main contrib non-free
-        deb http://archive.debian.org/debian-security $codename/updates main contrib non-free
-        EOF
-          rm -f /etc/apt/sources.list.d/*
-          echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until
-        fi
-
-    - uses: actions/checkout@v3
+    - name: Fix sources.list for archived Debian releases
       if: matrix.container == 'debian:buster'
-
-    - uses: actions/checkout@v6
-      if: matrix.container != 'debian:buster'
+      run: |
+        cat > /etc/apt/sources.list <<EOF
+        deb http://archive.debian.org/debian buster main contrib non-free
+        deb http://archive.debian.org/debian-security buster/updates main contrib non-free
+        EOF
+        rm -f /etc/apt/sources.list.d/*
+        echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until
 
     - uses: actions/checkout@v3
       with:
@@ -162,7 +144,7 @@ jobs:
       if: startsWith(matrix.os, 'macos')
       run: echo "$(perl -MConfig -e 'print $Config{sitebin}')" >> $GITHUB_PATH
 
-    - name: "apt: remove conflicting packages"
+    - name: Remove conflicting apt packages
       if: startsWith(matrix.container, 'debian') || startsWith(matrix.container || matrix.os, 'ubuntu')
       run: |
         sudocmd=$( [ "$(id -u)" -ne 0 ] && echo "sudo" || echo "" )
@@ -170,7 +152,7 @@ jobs:
         $sudocmd apt-get update -qq
         $sudocmd apt-get remove -y libgd3 nginx 2>/dev/null || true
 
-    - name: Setup CPAN with sysdeps
+    - name: Setup CPAN
       run: |
         distroprefs_opts=
         if [ "${{ inputs.include-distroprefs }}" = 'true' ]; then
@@ -191,40 +173,30 @@ jobs:
         set -ex
         $GITHUB_WORKSPACE/ci-helper-cpan-pm/ci-helper-cpan-pm --no-test $distroprefs_opts $sysdeps_opts $cpan_reporter_opts $debug_opts
 
-    - name: Clone target repository
-      env:
-        INPUT_REF: ${{ inputs.ref }}
-        INPUT_REPO: ${{ inputs.repository }}
+    - name: Install system dependencies
+      if: inputs.include-sysdeps
+      continue-on-error: true
       run: |
-        if [ -n "$INPUT_REF" ]; then
-          git clone --branch "$INPUT_REF" --depth=1 "https://github.com/${INPUT_REPO}.git" "$GITHUB_WORKSPACE/target-module" 2>/dev/null \
-            || { git clone "https://github.com/${INPUT_REPO}.git" "$GITHUB_WORKSPACE/target-module" && git -C "$GITHUB_WORKSPACE/target-module" checkout "$INPUT_REF"; }
-        else
-          git clone --depth=1 "https://github.com/${INPUT_REPO}.git" "$GITHUB_WORKSPACE/target-module"
-        fi
-        cd "$GITHUB_WORKSPACE/target-module"
-        echo "Cloned ${INPUT_REPO} at $(git rev-parse --short HEAD) ref=${INPUT_REF:-default}"
+        cpan-sysdeps --cpanmod "$MODULE" || true
+        cpan-sysdeps --cpanmod "$MODULE" --dry-run || true
 
-    - name: Detect module name
-      id: detect
-      run: bash $GITHUB_WORKSPACE/scripts/detect-module.sh $GITHUB_WORKSPACE/target-module
+    - name: Install cpanm
+      run: cpan App::cpanminus
 
-    - name: cpan-sysdeps check
-      if: inputs.include-sysdeps && steps.detect.outputs.module_name != ''
-      continue-on-error: true
-      env:
-        MODULE_NAME: ${{ steps.detect.outputs.module_name }}
-      run: cpan-sysdeps --cpanmod "$MODULE_NAME"
+    - name: Test module
+      run: |
+        set -ex
+        cpanm -v "$MODULE"
 
-    - name: cpan-sysdeps dry-run
-      if: inputs.include-sysdeps && steps.detect.outputs.module_name != ''
-      continue-on-error: true
-      env:
-        MODULE_NAME: ${{ steps.detect.outputs.module_name }}
-      run: cpan-sysdeps --cpanmod "$MODULE_NAME" --dry-run
-
-    - name: Install dependencies, build, and test
-      run: bash $GITHUB_WORKSPACE/scripts/build-and-test.sh $GITHUB_WORKSPACE/target-module
+    - name: Show installed version
+      if: success()
+      run: |
+        perl -e '
+          my $m = $ENV{MODULE};
+          (my $f = "$m.pm") =~ s{::}{/}g;
+          require $f;
+          printf "%s %s\n", $m, $m->VERSION // "?";
+        '
 
     - name: Prepare artifact name
       if: always() && inputs.enable-cpan-reporter == true
@@ -259,6 +231,9 @@ jobs:
           - os: 'windows-2022'
           - os: 'windows-2025'
 
+    env:
+      MODULE: ${{ inputs.module }}
+
     steps:
     - name: Show inputs
       env:
@@ -266,13 +241,11 @@ jobs:
       run: echo "$INPUTS_JSON"
 
     - uses: actions/checkout@v6
-
-    - uses: actions/checkout@v6
       with:
         repository: eserte/ci-helper-cpan-pm
         path: ci-helper-cpan-pm
 
-    - name: Setup CPAN with sysdeps
+    - name: Setup CPAN
       run: |
         $distroprefs_opts = ""
         if ("${{ inputs.include-distroprefs }}" -eq "true") {
@@ -299,44 +272,32 @@ jobs:
         echo "C:\Strawberry\c\bin;C:\Strawberry\perl\site\bin;C:\Strawberry\perl\bin;$env:PATH" > $env:GITHUB_PATH
       shell: powershell
 
-    - name: Clone target repository
-      env:
-        INPUT_REF: ${{ inputs.ref }}
-        INPUT_REPO: ${{ inputs.repository }}
+    - name: Install system dependencies
+      if: inputs.include-sysdeps
+      continue-on-error: true
+      shell: bash
+      run: cpan-sysdeps --cpanmod "$MODULE" --dry-run || true
+
+    - name: Install cpanm
+      shell: bash
+      run: cpan App::cpanminus
+
+    - name: Test module
+      shell: bash
       run: |
-        $ref = $env:INPUT_REF
-        if ($ref -ne "") {
-          $result = git clone --branch $ref --depth=1 "https://github.com/${env:INPUT_REPO}.git" "$env:GITHUB_WORKSPACE\target-module" 2>&1
-          if ($LASTEXITCODE -ne 0) {
-            git clone "https://github.com/${env:INPUT_REPO}.git" "$env:GITHUB_WORKSPACE\target-module"
-            git -C "$env:GITHUB_WORKSPACE\target-module" checkout $ref
-          }
-        } else {
-          git clone --depth=1 "https://github.com/${env:INPUT_REPO}.git" "$env:GITHUB_WORKSPACE\target-module"
-        }
+        set -ex
+        cpanm -v "$MODULE"
 
-    - name: Detect module name
-      id: detect
+    - name: Show installed version
+      if: success()
       shell: bash
-      run: bash "$GITHUB_WORKSPACE/scripts/detect-module.sh" "$GITHUB_WORKSPACE/target-module"
-
-    - name: cpan-sysdeps check
-      if: inputs.include-sysdeps && steps.detect.outputs.module_name != ''
-      continue-on-error: true
-      env:
-        MODULE_NAME: ${{ steps.detect.outputs.module_name }}
-      run: cpan-sysdeps --cpanmod "$MODULE_NAME"
-
-    - name: cpan-sysdeps dry-run
-      if: inputs.include-sysdeps && steps.detect.outputs.module_name != ''
-      continue-on-error: true
-      env:
-        MODULE_NAME: ${{ steps.detect.outputs.module_name }}
-      run: cpan-sysdeps --cpanmod "$MODULE_NAME" --dry-run
-
-    - name: Install dependencies, build, and test
-      shell: bash
-      run: bash "$GITHUB_WORKSPACE/scripts/build-and-test.sh" "$GITHUB_WORKSPACE/target-module"
+      run: |
+        perl -e '
+          my $m = $ENV{MODULE};
+          (my $f = "$m.pm") =~ s{::}{/}g;
+          require $f;
+          printf "%s %s\n", $m, $m->VERSION // "?";
+        '
 
     - name: Prepare artifact path
       if: always() && inputs.enable-cpan-reporter == true
@@ -373,13 +334,14 @@ jobs:
             osvers: '10.1'
             architecture: 'x86-64'
 
+    env:
+      MODULE: ${{ inputs.module }}
+
     steps:
     - name: Show inputs
       env:
         INPUTS_JSON: ${{ toJSON(github.event.inputs) }}
       run: echo "$INPUTS_JSON"
-
-    - uses: actions/checkout@v6
 
     - uses: actions/checkout@v6
       with:
@@ -388,8 +350,7 @@ jobs:
 
     - uses: cross-platform-actions/action@v0.32.0
       env:
-        INPUT_REF: ${{ inputs.ref }}
-        INPUT_REPO: ${{ inputs.repository }}
+        MODULE: ${{ inputs.module }}
       with:
         operating_system: '${{ matrix.operating_system }}'
         version: '${{ matrix.osvers }}'
@@ -442,30 +403,29 @@ jobs:
           set +x
           echo "::endgroup::"
 
-          echo "::group::Clone target repository"
-          if [ -n "$INPUT_REF" ]; then
-            git clone --branch "$INPUT_REF" --depth=1 "https://github.com/${INPUT_REPO}.git" "$GITHUB_WORKSPACE/target-module" 2>/dev/null \
-              || { git clone "https://github.com/${INPUT_REPO}.git" "$GITHUB_WORKSPACE/target-module" && git -C "$GITHUB_WORKSPACE/target-module" checkout "$INPUT_REF"; }
-          else
-            git clone --depth=1 "https://github.com/${INPUT_REPO}.git" "$GITHUB_WORKSPACE/target-module"
-          fi
-          cd "$GITHUB_WORKSPACE/target-module"
-          echo "Cloned ${INPUT_REPO} at $(git rev-parse --short HEAD) ref=${INPUT_REF:-default}"
-          echo "::endgroup::"
-
-          echo "::group::Detect module and install system deps"
-          MODULE_NAME=$(bash $GITHUB_WORKSPACE/scripts/detect-module.sh $GITHUB_WORKSPACE/target-module)
-
-          if [ -n "$MODULE_NAME" ] && [ -n "$sysdeps_opts" ]; then
-            set +e
-            cpan-sysdeps --cpanmod "$MODULE_NAME" || true
-            cpan-sysdeps --cpanmod "$MODULE_NAME" --dry-run || true
-            set -e
+          echo "::group::Install system dependencies"
+          if [ -n "$sysdeps_opts" ]; then
+            cpan-sysdeps --cpanmod "$MODULE" || true
+            cpan-sysdeps --cpanmod "$MODULE" --dry-run || true
           fi
           echo "::endgroup::"
 
-          echo "::group::Install dependencies, build, and test"
-          bash $GITHUB_WORKSPACE/scripts/build-and-test.sh $GITHUB_WORKSPACE/target-module
+          echo "::group::Install cpanm"
+          cpan App::cpanminus
+          echo "::endgroup::"
+
+          echo "::group::Test module"
+          set -ex
+          cpanm -v "$MODULE"
+          echo "::endgroup::"
+
+          echo "::group::Show installed version"
+          perl -e '
+            my $m = $ENV{MODULE};
+            (my $f = "$m.pm") =~ s{::}{/}g;
+            require $f;
+            printf "%s %s\n", $m, $m->VERSION // "?";
+          ' || true
           echo "::endgroup::"
 
     - name: Upload CPAN test reports
