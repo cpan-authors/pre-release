@@ -331,11 +331,15 @@ jobs:
         echo "C:\Strawberry\c\bin;C:\Strawberry\perl\site\bin;C:\Strawberry\perl\bin" >> $env:GITHUB_PATH
       shell: powershell
 
-    - name: Remove MSYS Perl to avoid PATH conflicts
+    - name: Fix Perl PATH for bash on Windows
       shell: bash
       run: |
-        if [ -f /usr/bin/perl ]; then
-          rm -f /usr/bin/perl
+        # Remove MSYS Perl which shadows Strawberry
+        rm -f /usr/bin/perl /usr/bin/perl.exe 2>/dev/null || true
+        # Create cpan wrapper since cpan.bat isn't executable from bash
+        if ! command -v cpan &>/dev/null; then
+          printf '#!/bin/bash\nexec perl -S cpan "$@"\n' > /usr/local/bin/cpan
+          chmod +x /usr/local/bin/cpan
         fi
 
     - name: Clone target repository
