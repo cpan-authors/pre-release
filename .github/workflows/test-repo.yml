@@ -336,11 +336,10 @@ jobs:
       run: |
         # Remove MSYS Perl which shadows Strawberry
         rm -f /usr/bin/perl /usr/bin/perl.exe 2>/dev/null || true
-        # Create cpan wrapper since cpan.bat isn't executable from bash
-        if ! command -v cpan &>/dev/null; then
-          printf '#!/bin/bash\nexec perl -S cpan "$@"\n' > /usr/bin/cpan
-          chmod +x /usr/bin/cpan
-        fi
+        # Overwrite MSYS cpan — its #!/bin/bash shebang resolves to
+        # /bin/bash which doesn't exist in Git-for-Windows bash
+        printf '#!/bin/sh\nexec perl -S cpan "$@"\n' > /usr/bin/cpan
+        chmod +x /usr/bin/cpan
 
     - name: Clone target repository
       run: |
