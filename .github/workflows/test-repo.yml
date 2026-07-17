@@ -336,10 +336,6 @@ jobs:
       run: |
         # Remove MSYS Perl which shadows Strawberry
         rm -f /usr/bin/perl /usr/bin/perl.exe 2>/dev/null || true
-        # Overwrite MSYS cpan — its #!/bin/bash shebang resolves to
-        # /bin/bash which doesn't exist in Git-for-Windows bash
-        printf '#!/bin/sh\nexec perl -S cpan "$@"\n' > /usr/bin/cpan
-        chmod +x /usr/bin/cpan
 
     - name: Clone target repository
       run: |
@@ -400,7 +396,7 @@ jobs:
             print join " ", sort keys %d if %d;
           ' 2>/dev/null || true)
           if [ -n "$CONFIGURE_DEPS" ]; then
-            cpan $CONFIGURE_DEPS
+            perl -S cpan $CONFIGURE_DEPS
           fi
         fi
 
@@ -430,7 +426,7 @@ jobs:
         ' 2>/dev/null || true)
 
         if [ -n "$DEPS" ]; then
-          cpan $DEPS
+          perl -S cpan $DEPS
         fi
 
         # Build and test
