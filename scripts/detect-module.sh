@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Detect CPAN module name from a repository checkout.
 # Usage: detect-module.sh [target-dir]
 # Stdout: module name (or empty). Writes module_name= to GITHUB_OUTPUT in CI.

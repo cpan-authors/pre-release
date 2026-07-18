@@ -360,6 +360,7 @@ jobs:
         operating_system: '${{ matrix.operating_system }}'
         version: '${{ matrix.osvers }}'
         architecture: '${{ matrix.architecture }}'
+        environment_variables: MODULE
         shell: bash
         run: |
           echo "::group::Install system prerequisites"

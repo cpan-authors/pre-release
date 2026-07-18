@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Build and test a CPAN module from its repository checkout.
 # Usage: build-and-test.sh [target-dir]
 set -ex

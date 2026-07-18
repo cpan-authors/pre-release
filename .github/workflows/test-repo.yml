@@ -207,7 +207,7 @@ jobs:
 
     - name: Detect module name
       id: detect
-      run: bash $GITHUB_WORKSPACE/scripts/detect-module.sh $GITHUB_WORKSPACE/target-module
+      run: sh $GITHUB_WORKSPACE/scripts/detect-module.sh $GITHUB_WORKSPACE/target-module
 
     - name: cpan-sysdeps check
       if: inputs.include-sysdeps && steps.detect.outputs.module_name != ''
@@ -224,7 +224,7 @@ jobs:
       run: cpan-sysdeps --cpanmod "$MODULE_NAME" --dry-run
 
     - name: Install dependencies, build, and test
-      run: bash $GITHUB_WORKSPACE/scripts/build-and-test.sh $GITHUB_WORKSPACE/target-module
+      run: sh $GITHUB_WORKSPACE/scripts/build-and-test.sh $GITHUB_WORKSPACE/target-module
 
     - name: Prepare artifact name
       if: always() && inputs.enable-cpan-reporter == true
@@ -399,6 +399,7 @@ jobs:
         operating_system: '${{ matrix.operating_system }}'
         version: '${{ matrix.osvers }}'
         architecture: '${{ matrix.architecture }}'
+        environment_variables: INPUT_REF INPUT_REPO
         shell: bash
         run: |
           echo "::group::Install system prerequisites"
@@ -459,7 +460,7 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Detect module and install system deps"
-          MODULE_NAME=$(bash $GITHUB_WORKSPACE/scripts/detect-module.sh $GITHUB_WORKSPACE/target-module)
+          MODULE_NAME=$(sh $GITHUB_WORKSPACE/scripts/detect-module.sh $GITHUB_WORKSPACE/target-module)
 
           if [ -n "$MODULE_NAME" ] && [ -n "$sysdeps_opts" ]; then
             set +e
@@ -470,7 +471,7 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Install dependencies, build, and test"
-          bash $GITHUB_WORKSPACE/scripts/build-and-test.sh $GITHUB_WORKSPACE/target-module
+          sh $GITHUB_WORKSPACE/scripts/build-and-test.sh $GITHUB_WORKSPACE/target-module
           echo "::endgroup::"
 
     - name: Upload CPAN test reports
