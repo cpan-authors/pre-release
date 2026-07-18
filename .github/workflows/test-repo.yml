@@ -182,7 +182,7 @@ jobs:
         fi
         cpan_reporter_opts=
         if [ "${{ inputs.enable-cpan-reporter }}" = 'true' ]; then
-          cpan_reporter_opts='--enable-cpan-reporter --email-from=${{ github.actor }}@users.noreply.github.com'
+          cpan_reporter_opts="--enable-cpan-reporter --email-from=${GITHUB_ACTOR}@users.noreply.github.com"
         fi
         debug_opts=
         if [ "${{ inputs.debug }}" = 'true' ]; then
@@ -284,7 +284,7 @@ jobs:
         }
         $cpan_reporter_opts = ""
         if ("${{ inputs.enable-cpan-reporter }}" -eq "true") {
-          $cpan_reporter_opts = "--enable-cpan-reporter --email-from=${{ github.actor }}@users.noreply.github.com"
+          $cpan_reporter_opts = "--enable-cpan-reporter --email-from=$env:GITHUB_ACTOR@users.noreply.github.com"
         }
         $debug_opts = ""
         if ("${{ inputs.debug }}" -eq "true") {
@@ -395,11 +395,12 @@ jobs:
       env:
         INPUT_REF: ${{ inputs.ref }}
         INPUT_REPO: ${{ inputs.repository }}
+        ACTOR: ${{ github.actor }}
       with:
         operating_system: '${{ matrix.operating_system }}'
         version: '${{ matrix.osvers }}'
         architecture: '${{ matrix.architecture }}'
-        environment_variables: INPUT_REF INPUT_REPO
+        environment_variables: INPUT_REF INPUT_REPO ACTOR
         shell: bash
         run: |
           echo "::group::Install system prerequisites"
@@ -437,7 +438,7 @@ jobs:
           fi
           cpan_reporter_opts=
           if [ "${{ inputs.enable-cpan-reporter }}" = 'true' ]; then
-            cpan_reporter_opts='--enable-cpan-reporter --email-from=${{ github.actor }}@users.noreply.github.com'
+            cpan_reporter_opts="--enable-cpan-reporter --email-from=${ACTOR}@users.noreply.github.com"
           fi
           debug_opts=
           if [ "${{ inputs.debug }}" = 'true' ]; then
