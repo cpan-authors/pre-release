@@ -490,7 +490,7 @@ jobs:
           has_sysdeps_support=no
           case "${{ matrix.operating_system }}" in
             freebsd)
-              sudo env IGNORE_OSVERSION=yes pkg update
+              sudo env IGNORE_OSVERSION=yes pkg update || echo "::warning::pkg update failed (non-fatal)"
               sudo pkg install -y perl5 git
               has_sysdeps_support=yes
               ;;
