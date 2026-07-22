@@ -478,18 +478,19 @@ jobs:
         repository: eserte/ci-helper-cpan-pm
         path: ci-helper-cpan-pm
 
-    - uses: cross-platform-actions/action@v0.32.0
+    - uses: cross-platform-actions/action@v1.3.0
       with:
         operating_system: '${{ matrix.operating_system }}'
         version: '${{ matrix.osvers }}'
         architecture: '${{ matrix.architecture }}'
         shell: bash
+        memory: 8G
         run: |
           echo "::group::Install system prerequisites"
           has_sysdeps_support=no
           case "${{ matrix.operating_system }}" in
             freebsd)
-              sudo pkg update
+              sudo env IGNORE_OSVERSION=yes pkg update
               sudo pkg install -y perl5 git
               has_sysdeps_support=yes
               ;;
