@@ -328,8 +328,12 @@ jobs:
 
     - name: Prepend Strawberry Perl to PATH
       run: |
-        echo "C:\Strawberry\c\bin;C:\Strawberry\perl\site\bin;C:\Strawberry\perl\bin;$env:PATH" > $env:GITHUB_PATH
+        echo "C:\Strawberry\c\bin;C:\Strawberry\perl\site\bin;C:\Strawberry\perl\bin" >> $env:GITHUB_PATH
       shell: powershell
+
+    - name: Remove MSYS2 Perl so bash steps use Strawberry
+      shell: bash
+      run: rm -f /usr/bin/perl /usr/bin/perl.exe 2>/dev/null || true
 
     - name: Clone target repository
       run: |
