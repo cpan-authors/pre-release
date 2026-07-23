@@ -25,6 +25,11 @@ on:
         type: boolean
         default: false
 
+env:
+  PERL_MM_USE_DEFAULT: 1
+  AUTOMATED_TESTING: 1
+  NONINTERACTIVE_TESTING: 1
+
 jobs:
   test-module:
     name: on ${{ matrix.container || matrix.os }}
@@ -484,6 +489,7 @@ jobs:
         version: '${{ matrix.osvers }}'
         architecture: '${{ matrix.architecture }}'
         shell: bash
+        environment_variables: PERL_MM_USE_DEFAULT AUTOMATED_TESTING NONINTERACTIVE_TESTING
         run: |
           echo "::group::Install system prerequisites"
           has_sysdeps_support=no
