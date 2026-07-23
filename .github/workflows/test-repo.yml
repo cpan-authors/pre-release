@@ -508,6 +508,7 @@ jobs:
         version: '${{ matrix.osvers }}'
         architecture: '${{ matrix.architecture }}'
         shell: bash
+        environment_variables: REPO
         run: |
           echo "::group::Install system prerequisites"
           has_sysdeps_support=no
