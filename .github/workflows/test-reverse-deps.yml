@@ -25,6 +25,9 @@ on:
         type: string
         default: 'latest'
 
+permissions:
+  contents: read
+
 env:
   PERL_MM_USE_DEFAULT: 1
   AUTOMATED_TESTING: 1

@@ -47,6 +47,9 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
 env:
   PERL_MM_USE_DEFAULT: 1
   AUTOMATED_TESTING: 1
