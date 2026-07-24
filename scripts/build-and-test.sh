@@ -3,6 +3,9 @@
 # Usage: build-and-test.sh [target-dir]
 set -ex
 
+export PERL_MM_USE_DEFAULT=1
+export NONINTERACTIVE_TESTING=1
+
 dir="${1:-.}"
 cd "$dir"
 

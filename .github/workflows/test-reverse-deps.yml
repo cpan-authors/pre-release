@@ -25,6 +25,11 @@ on:
         type: string
         default: 'latest'
 
+env:
+  PERL_MM_USE_DEFAULT: 1
+  AUTOMATED_TESTING: 1
+  NONINTERACTIVE_TESTING: 1
+
 jobs:
   test-reverse-deps:
     runs-on: ubuntu-latest

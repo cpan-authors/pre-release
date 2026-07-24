@@ -21,6 +21,11 @@ on:
         type: string
         default: ''
 
+env:
+  PERL_MM_USE_DEFAULT: 1
+  AUTOMATED_TESTING: 1
+  NONINTERACTIVE_TESTING: 1
+
 jobs:
   test:
     name: "Perl ${{ matrix.perl }} on ${{ matrix.os }}"
