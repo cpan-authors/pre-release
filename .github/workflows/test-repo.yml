@@ -25,6 +25,9 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
 jobs:
   test-module:
     name: on ${{ matrix.container || matrix.os }}
