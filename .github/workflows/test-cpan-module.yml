@@ -56,6 +56,7 @@ jobs:
   test-module:
     name: on ${{ matrix.container || matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     container: ${{ matrix.container }}
     strategy:
       fail-fast: false
@@ -229,6 +230,7 @@ jobs:
   test-module-windows:
     name: on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -324,6 +326,7 @@ jobs:
   test-module-bsd:
     name: on ${{ matrix.operating_system }} ${{ matrix.osvers }} ${{ matrix.architecture }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -358,7 +361,7 @@ jobs:
         repository: eserte/ci-helper-cpan-pm
         path: ci-helper-cpan-pm
 
-    - uses: cross-platform-actions/action@v0.32.0
+    - uses: cross-platform-actions/action@v1.3.0
       env:
         MODULE: ${{ inputs.module }}
         ACTOR: ${{ github.actor }}
@@ -366,6 +369,7 @@ jobs:
         operating_system: '${{ matrix.operating_system }}'
         version: '${{ matrix.osvers }}'
         architecture: '${{ matrix.architecture }}'
+        memory: 8G
         environment_variables: MODULE ACTOR PERL_MM_USE_DEFAULT AUTOMATED_TESTING NONINTERACTIVE_TESTING
         shell: bash
         run: |
@@ -373,7 +377,8 @@ jobs:
           has_sysdeps_support=no
           case "${{ matrix.operating_system }}" in
             freebsd)
-              sudo env IGNORE_OSVERSION=yes pkg update
+              sudo env IGNORE_OSVERSION=yes pkg update || echo "::warning::pkg update failed (non-fatal)"
+              sudo pkg clean -ay 2>/dev/null || true
               sudo pkg install -y perl5 git
               has_sysdeps_support=yes
               ;;
