@@ -100,14 +100,17 @@ jobs:
       run: echo "$INPUTS_JSON"
 
     - name: Fix sources.list for archived Debian releases
-      if: matrix.container == 'debian:buster'
+      if: startsWith(matrix.container, 'debian')
       run: |
-        cat > /etc/apt/sources.list <<EOF
-        deb http://archive.debian.org/debian buster main contrib non-free
-        deb http://archive.debian.org/debian-security buster/updates main contrib non-free
+        codename="$(grep VERSION_CODENAME /etc/os-release 2>/dev/null | cut -d= -f2 || true)"
+        if [ "$codename" = "buster" ] || [ "$codename" = "stretch" ]; then
+          cat > /etc/apt/sources.list <<EOF
+        deb http://archive.debian.org/debian $codename main contrib non-free
+        deb http://archive.debian.org/debian-security $codename/updates main contrib non-free
         EOF
-        rm -f /etc/apt/sources.list.d/*
-        echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until
+          rm -f /etc/apt/sources.list.d/*
+          echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until
+        fi
 
     - uses: actions/checkout@v3
       with:
