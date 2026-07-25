@@ -304,7 +304,18 @@ jobs:
         repository: eserte/ci-helper-cpan-pm
         path: ci-helper-cpan-pm
 
+    - name: Prepend Strawberry Perl to PATH
+      run: |
+        echo "C:\Strawberry\c\bin;C:\Strawberry\perl\site\bin;C:\Strawberry\perl\bin" >> $env:GITHUB_PATH
+      shell: powershell
+
+    - name: Remove MSYS2 perl so bash uses Strawberry
+      shell: bash
+      run: rm -f /usr/bin/perl /usr/bin/perl.exe 2>/dev/null || true
+
     - name: Setup CPAN with sysdeps
+      env:
+        PERL_MM_USE_DEFAULT: '1'
       run: |
         $distroprefs_opts = ""
         if ("${{ inputs.include-distroprefs }}" -eq "true") {
@@ -325,11 +336,6 @@ jobs:
         $ci_helper_cmd = "perl $env:GITHUB_WORKSPACE\ci-helper-cpan-pm\ci-helper-cpan-pm --no-test $distroprefs_opts $sysdeps_opts $cpan_reporter_opts $debug_opts"
         Write-Host $ci_helper_cmd
         Invoke-Expression $ci_helper_cmd
-
-    - name: Prepend Strawberry Perl to PATH
-      run: |
-        echo "C:\Strawberry\c\bin;C:\Strawberry\perl\site\bin;C:\Strawberry\perl\bin;$env:PATH" > $env:GITHUB_PATH
-      shell: powershell
 
     - name: Clone target repository
       run: |
@@ -362,6 +368,8 @@ jobs:
 
     - name: Install dependencies, build, and test
       shell: bash
+      env:
+        PERL_MM_USE_DEFAULT: '1'
       run: |
         cd "$GITHUB_WORKSPACE/target-module"
         set -ex
@@ -390,7 +398,7 @@ jobs:
             print join " ", sort keys %d if %d;
           ' 2>/dev/null || true)
           if [ -n "$CONFIGURE_DEPS" ]; then
-            cpan $CONFIGURE_DEPS
+            perl -S cpan $CONFIGURE_DEPS
           fi
         fi
 
@@ -420,7 +428,7 @@ jobs:
         ' 2>/dev/null || true)
 
         if [ -n "$DEPS" ]; then
-          cpan $DEPS
+          perl -S cpan $DEPS
         fi
 
         # Build and test
@@ -478,18 +486,20 @@ jobs:
         repository: eserte/ci-helper-cpan-pm
         path: ci-helper-cpan-pm
 
-    - uses: cross-platform-actions/action@v0.32.0
+    - uses: cross-platform-actions/action@v1.3.0
       with:
         operating_system: '${{ matrix.operating_system }}'
         version: '${{ matrix.osvers }}'
         architecture: '${{ matrix.architecture }}'
+        memory: 8G
         shell: bash
         run: |
           echo "::group::Install system prerequisites"
           has_sysdeps_support=no
           case "${{ matrix.operating_system }}" in
             freebsd)
-              sudo pkg update
+              sudo env IGNORE_OSVERSION=yes pkg update || echo "::warning::pkg update failed (non-fatal)"
+              sudo pkg clean -ay 2>/dev/null || true
               sudo pkg install -y perl5 git
               has_sysdeps_support=yes
               ;;
