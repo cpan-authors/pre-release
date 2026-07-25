@@ -1,0 +1,23 @@
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install actionlint
+        run: bash <(curl -sS https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+
+      - name: Run actionlint
+        # -shellcheck="" disables built-in shellcheck integration
+        # -ignore checkout@v3: intentionally used for debian:buster (needs old glibc/Node 16)
+        run: ./actionlint -color -shellcheck="" -ignore 'checkout@v3'
