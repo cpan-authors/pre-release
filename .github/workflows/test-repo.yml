@@ -25,6 +25,15 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
+env:
+  PERL_MM_USE_DEFAULT: 1
+  AUTOMATED_TESTING: 1
+  NONINTERACTIVE_TESTING: 1
+  REPO: ${{ inputs.repository }}
+
 jobs:
   test-module:
     name: on ${{ matrix.container || matrix.os }}
@@ -65,7 +74,9 @@ jobs:
 
     steps:
     - name: Show inputs
-      run: echo "${{ toJSON(github.event.inputs) }}"
+      env:
+        INPUTS_JSON: ${{ toJSON(github.event.inputs) }}
+      run: echo "$INPUTS_JSON"
 
     - name: "Fix sources.list for archived Debian releases"
       run: |
@@ -155,9 +166,9 @@ jobs:
 
     - name: Clone target repository
       run: |
-        git clone --depth=1 https://github.com/${{ inputs.repository }}.git $GITHUB_WORKSPACE/target-module
-        cd $GITHUB_WORKSPACE/target-module
-        echo "Cloned ${{ inputs.repository }} at $(git rev-parse --short HEAD) on branch $(git branch --show-current || git rev-parse --abbrev-ref HEAD)"
+        git clone --depth=1 "https://github.com/${REPO}.git" "$GITHUB_WORKSPACE/target-module"
+        cd "$GITHUB_WORKSPACE/target-module"
+        echo "Cloned $REPO at $(git rev-parse --short HEAD) on branch $(git branch --show-current || git rev-parse --abbrev-ref HEAD)"
 
     - name: Detect module name
       id: detect
@@ -184,12 +195,16 @@ jobs:
     - name: cpan-sysdeps check
       if: inputs.include-sysdeps && steps.detect.outputs.module_name != ''
       continue-on-error: true
-      run: cpan-sysdeps --cpanmod ${{ steps.detect.outputs.module_name }}
+      env:
+        MODULE_NAME: ${{ steps.detect.outputs.module_name }}
+      run: cpan-sysdeps --cpanmod "$MODULE_NAME"
 
     - name: cpan-sysdeps dry-run
       if: inputs.include-sysdeps && steps.detect.outputs.module_name != ''
       continue-on-error: true
-      run: cpan-sysdeps --cpanmod ${{ steps.detect.outputs.module_name }} --dry-run
+      env:
+        MODULE_NAME: ${{ steps.detect.outputs.module_name }}
+      run: cpan-sysdeps --cpanmod "$MODULE_NAME" --dry-run
 
     - name: Install dependencies, build, and test
       run: |
@@ -202,7 +217,7 @@ jobs:
         elif [ -f Build.PL ]; then
           BUILD_SYSTEM=mb
         else
-          echo "::error::No Makefile.PL or Build.PL found in ${{ inputs.repository }}"
+          echo "::error::No Makefile.PL or Build.PL found in ${REPO}"
           exit 1
         fi
 
@@ -297,7 +312,10 @@ jobs:
 
     steps:
     - name: Show inputs
-      run: echo "${{ toJSON(github.event.inputs) }}"
+      env:
+        INPUTS_JSON: ${{ toJSON(github.event.inputs) }}
+      run: echo "$INPUTS_JSON"
+      shell: bash
 
     - uses: actions/checkout@v6
       with:
@@ -338,8 +356,9 @@ jobs:
         Invoke-Expression $ci_helper_cmd
 
     - name: Clone target repository
+      shell: bash
       run: |
-        git clone --depth=1 https://github.com/${{ inputs.repository }}.git $env:GITHUB_WORKSPACE\target-module
+        git clone --depth=1 "https://github.com/${REPO}.git" "$GITHUB_WORKSPACE/target-module"
 
     - name: Detect module name
       id: detect
@@ -364,7 +383,10 @@ jobs:
     - name: cpan-sysdeps check
       if: inputs.include-sysdeps && steps.detect.outputs.module_name != ''
       continue-on-error: true
-      run: cpan-sysdeps --cpanmod ${{ steps.detect.outputs.module_name }}
+      env:
+        MODULE_NAME: ${{ steps.detect.outputs.module_name }}
+      shell: bash
+      run: cpan-sysdeps --cpanmod "$MODULE_NAME"
 
     - name: Install dependencies, build, and test
       shell: bash
@@ -381,7 +403,7 @@ jobs:
         elif [ -f Build.PL ]; then
           BUILD_SYSTEM=mb
         else
-          echo "::error::No Makefile.PL or Build.PL found in ${{ inputs.repository }}"
+          echo "::error::No Makefile.PL or Build.PL found in ${REPO}"
           exit 1
         fi
 
@@ -479,7 +501,9 @@ jobs:
 
     steps:
     - name: Show inputs
-      run: echo "${{ toJSON(github.event.inputs) }}"
+      env:
+        INPUTS_JSON: ${{ toJSON(github.event.inputs) }}
+      run: echo "$INPUTS_JSON"
 
     - uses: actions/checkout@v6
       with:
@@ -492,6 +516,7 @@ jobs:
         version: '${{ matrix.osvers }}'
         architecture: '${{ matrix.architecture }}'
         memory: 8G
+        environment_variables: REPO PERL_MM_USE_DEFAULT AUTOMATED_TESTING NONINTERACTIVE_TESTING
         shell: bash
         run: |
           echo "::group::Install system prerequisites"
@@ -542,9 +567,9 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Clone target repository"
-          git clone --depth=1 https://github.com/${{ inputs.repository }}.git $GITHUB_WORKSPACE/target-module
-          cd $GITHUB_WORKSPACE/target-module
-          echo "Cloned ${{ inputs.repository }} at $(git rev-parse --short HEAD)"
+          git clone --depth=1 "https://github.com/${REPO}.git" "$GITHUB_WORKSPACE/target-module"
+          cd "$GITHUB_WORKSPACE/target-module"
+          echo "Cloned $REPO at $(git rev-parse --short HEAD)"
           echo "::endgroup::"
 
           echo "::group::Detect module and install system deps"
