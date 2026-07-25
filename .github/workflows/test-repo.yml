@@ -398,7 +398,7 @@ jobs:
             print join " ", sort keys %d if %d;
           ' 2>/dev/null || true)
           if [ -n "$CONFIGURE_DEPS" ]; then
-            cpan $CONFIGURE_DEPS
+            perl -S cpan $CONFIGURE_DEPS
           fi
         fi
 
@@ -428,7 +428,7 @@ jobs:
         ' 2>/dev/null || true)
 
         if [ -n "$DEPS" ]; then
-          cpan $DEPS
+          perl -S cpan $DEPS
         fi
 
         # Build and test
