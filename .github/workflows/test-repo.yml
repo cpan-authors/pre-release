@@ -30,6 +30,7 @@ jobs:
     name: on ${{ matrix.container || matrix.os }}
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -288,6 +289,7 @@ jobs:
   test-module-windows:
     name: on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -449,6 +451,7 @@ jobs:
   test-module-bsd:
     name: on ${{ matrix.operating_system }} ${{ matrix.osvers }} ${{ matrix.architecture }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
