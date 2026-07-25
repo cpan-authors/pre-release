@@ -306,8 +306,12 @@ jobs:
 
     - name: Prepend Strawberry Perl to PATH
       run: |
-        echo "C:\Strawberry\c\bin;C:\Strawberry\perl\site\bin;C:\Strawberry\perl\bin;$env:PATH" > $env:GITHUB_PATH
+        echo "C:\Strawberry\c\bin;C:\Strawberry\perl\site\bin;C:\Strawberry\perl\bin" >> $env:GITHUB_PATH
       shell: powershell
+
+    - name: Remove MSYS2 perl so bash uses Strawberry
+      shell: bash
+      run: rm -f /usr/bin/perl /usr/bin/perl.exe 2>/dev/null || true
 
     - name: Setup CPAN with sysdeps
       env:
@@ -494,7 +498,8 @@ jobs:
           has_sysdeps_support=no
           case "${{ matrix.operating_system }}" in
             freebsd)
-              sudo pkg update
+              sudo env IGNORE_OSVERSION=yes pkg update || echo "::warning::pkg update failed (non-fatal)"
+              sudo pkg clean -ay 2>/dev/null || true
               sudo pkg install -y perl5 git
               has_sysdeps_support=yes
               ;;
