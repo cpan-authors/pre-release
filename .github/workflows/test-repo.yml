@@ -304,7 +304,14 @@ jobs:
         repository: eserte/ci-helper-cpan-pm
         path: ci-helper-cpan-pm
 
+    - name: Prepend Strawberry Perl to PATH
+      run: |
+        echo "C:\Strawberry\c\bin;C:\Strawberry\perl\site\bin;C:\Strawberry\perl\bin;$env:PATH" > $env:GITHUB_PATH
+      shell: powershell
+
     - name: Setup CPAN with sysdeps
+      env:
+        PERL_MM_USE_DEFAULT: '1'
       run: |
         $distroprefs_opts = ""
         if ("${{ inputs.include-distroprefs }}" -eq "true") {
@@ -325,11 +332,6 @@ jobs:
         $ci_helper_cmd = "perl $env:GITHUB_WORKSPACE\ci-helper-cpan-pm\ci-helper-cpan-pm --no-test $distroprefs_opts $sysdeps_opts $cpan_reporter_opts $debug_opts"
         Write-Host $ci_helper_cmd
         Invoke-Expression $ci_helper_cmd
-
-    - name: Prepend Strawberry Perl to PATH
-      run: |
-        echo "C:\Strawberry\c\bin;C:\Strawberry\perl\site\bin;C:\Strawberry\perl\bin;$env:PATH" > $env:GITHUB_PATH
-      shell: powershell
 
     - name: Clone target repository
       run: |
@@ -362,6 +364,8 @@ jobs:
 
     - name: Install dependencies, build, and test
       shell: bash
+      env:
+        PERL_MM_USE_DEFAULT: '1'
       run: |
         cd "$GITHUB_WORKSPACE/target-module"
         set -ex
@@ -478,11 +482,12 @@ jobs:
         repository: eserte/ci-helper-cpan-pm
         path: ci-helper-cpan-pm
 
-    - uses: cross-platform-actions/action@v0.32.0
+    - uses: cross-platform-actions/action@v1.3.0
       with:
         operating_system: '${{ matrix.operating_system }}'
         version: '${{ matrix.osvers }}'
         architecture: '${{ matrix.architecture }}'
+        memory: 8G
         shell: bash
         run: |
           echo "::group::Install system prerequisites"
