@@ -1,5 +1,5 @@
 name: Test CPAN Module from Repository
-run-name: Test ${{ inputs.repository }}
+run-name: Test ${{ inputs.repository }}${{ inputs.ref && format(' @ {0}', inputs.ref) || '' }}
 
 on:
   workflow_dispatch:
@@ -20,6 +20,11 @@ on:
         description: 'Send test reports to CPAN Testers'
         type: boolean
         default: false
+      ref:
+        description: 'Git ref to test (branch or tag). Default: default branch'
+        type: string
+        required: false
+        default: ''
       debug:
         description: 'Enable debug output'
         type: boolean
@@ -33,6 +38,7 @@ env:
   AUTOMATED_TESTING: 1
   NONINTERACTIVE_TESTING: 1
   REPO: ${{ inputs.repository }}
+  REF: ${{ inputs.ref }}
 
 jobs:
   test-module:
@@ -166,7 +172,11 @@ jobs:
 
     - name: Clone target repository
       run: |
-        git clone --depth=1 "https://github.com/${REPO}.git" "$GITHUB_WORKSPACE/target-module"
+        clone_args="--depth=1"
+        if [ -n "$REF" ]; then
+          clone_args="$clone_args --branch $REF"
+        fi
+        git clone $clone_args "https://github.com/${REPO}.git" "$GITHUB_WORKSPACE/target-module"
         cd "$GITHUB_WORKSPACE/target-module"
         echo "Cloned $REPO at $(git rev-parse --short HEAD) on branch $(git branch --show-current || git rev-parse --abbrev-ref HEAD)"
 
@@ -358,7 +368,11 @@ jobs:
     - name: Clone target repository
       shell: bash
       run: |
-        git clone --depth=1 "https://github.com/${REPO}.git" "$GITHUB_WORKSPACE/target-module"
+        clone_args="--depth=1"
+        if [ -n "$REF" ]; then
+          clone_args="$clone_args --branch $REF"
+        fi
+        git clone $clone_args "https://github.com/${REPO}.git" "$GITHUB_WORKSPACE/target-module"
 
     - name: Detect module name
       id: detect
@@ -516,7 +530,7 @@ jobs:
         version: '${{ matrix.osvers }}'
         architecture: '${{ matrix.architecture }}'
         memory: 8G
-        environment_variables: REPO PERL_MM_USE_DEFAULT AUTOMATED_TESTING NONINTERACTIVE_TESTING
+        environment_variables: REPO REF PERL_MM_USE_DEFAULT AUTOMATED_TESTING NONINTERACTIVE_TESTING
         shell: bash
         run: |
           echo "::group::Install system prerequisites"
@@ -567,7 +581,11 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Clone target repository"
-          git clone --depth=1 "https://github.com/${REPO}.git" "$GITHUB_WORKSPACE/target-module"
+          clone_args="--depth=1"
+          if [ -n "$REF" ]; then
+            clone_args="$clone_args --branch $REF"
+          fi
+          git clone $clone_args "https://github.com/${REPO}.git" "$GITHUB_WORKSPACE/target-module"
           cd "$GITHUB_WORKSPACE/target-module"
           echo "Cloned $REPO at $(git rev-parse --short HEAD)"
           echo "::endgroup::"
